@@ -18,6 +18,7 @@ namespace CSharp_YoloOnnx
         public int CanvasHeight { get; set; }
         public List<PointF> SourcePoints { get; set; }
         public List<PointF> CanvasPoints { get; set; }
+        public List<int> StrokeStartIndices { get; set; }
     }
 
     public static class AirDrawStorage
@@ -26,6 +27,14 @@ namespace CSharp_YoloOnnx
         private const int CanvasPadding = 32;
 
         public static AirDrawSaveResult Save(IList<PointF> points, string outputDirectory)
+        {
+            return Save(points, null, outputDirectory);
+        }
+
+        public static AirDrawSaveResult Save(
+            IList<PointF> points,
+            IList<int> strokeStartIndices,
+            string outputDirectory)
         {
             if (points == null)
                 throw new ArgumentNullException(nameof(points));
@@ -50,7 +59,16 @@ namespace CSharp_YoloOnnx
                 DefaultCanvasSize,
                 CanvasPadding);
 
-            RenderDrawing(canvasPoints, imagePath, DefaultCanvasSize, DefaultCanvasSize);
+            List<int> normalizedStrokeStarts = NormalizeStrokeStarts(
+                strokeStartIndices,
+                sourcePoints.Count);
+
+            RenderDrawing(
+                canvasPoints,
+                normalizedStrokeStarts,
+                imagePath,
+                DefaultCanvasSize,
+                DefaultCanvasSize);
 
             AirDrawSaveResult result = new AirDrawSaveResult
             {
@@ -60,7 +78,8 @@ namespace CSharp_YoloOnnx
                 CanvasWidth = DefaultCanvasSize,
                 CanvasHeight = DefaultCanvasSize,
                 SourcePoints = sourcePoints,
-                CanvasPoints = canvasPoints
+                CanvasPoints = canvasPoints,
+                StrokeStartIndices = normalizedStrokeStarts
             };
 
             WriteMetadata(result, null, null);
@@ -81,7 +100,7 @@ namespace CSharp_YoloOnnx
                 new UTF8Encoding(false)))
             {
                 writer.WriteLine("{");
-                writer.WriteLine("  \"version\": 1,");
+                writer.WriteLine("  \"version\": 2,");
                 writer.WriteLine(
                     "  \"createdAt\": \"" +
                     result.CreatedAt.ToString("o", CultureInfo.InvariantCulture) +
@@ -90,6 +109,10 @@ namespace CSharp_YoloOnnx
                 writer.WriteLine("  \"canvasWidth\": " + result.CanvasWidth + ",");
                 writer.WriteLine("  \"canvasHeight\": " + result.CanvasHeight + ",");
                 writer.WriteLine("  \"sourcePointCount\": " + result.SourcePoints.Count + ",");
+                writer.WriteLine(
+                    "  \"strokeCount\": " +
+                    result.StrokeStartIndices.Count +
+                    ",");
 
                 WritePointArray(writer, "sourcePoints", result.SourcePoints, 1f, 1f, true);
                 WritePointArray(
@@ -98,6 +121,11 @@ namespace CSharp_YoloOnnx
                     result.CanvasPoints,
                     result.CanvasWidth,
                     result.CanvasHeight,
+                    true);
+                WriteIntegerArray(
+                    writer,
+                    "strokeStartIndices",
+                    result.StrokeStartIndices,
                     true);
 
                 if (!string.IsNullOrWhiteSpace(templateImagePath) && similarityScore.HasValue)
@@ -170,6 +198,7 @@ namespace CSharp_YoloOnnx
 
         private static void RenderDrawing(
             IList<PointF> points,
+            IList<int> strokeStartIndices,
             string imagePath,
             int width,
             int height)
@@ -187,30 +216,79 @@ namespace CSharp_YoloOnnx
                 pen.EndCap = LineCap.Round;
                 pen.LineJoin = LineJoin.Round;
 
-                if (points.Count == 1)
+                for (int strokeIndex = 0;
+                    strokeIndex < strokeStartIndices.Count;
+                    strokeIndex++)
                 {
-                    graphics.FillEllipse(
-                        Brushes.White,
-                        points[0].X - 4f,
-                        points[0].Y - 4f,
-                        8f,
-                        8f);
-                }
-                else
-                {
-                    graphics.DrawLines(pen, ToPointArray(points));
+                    int start = strokeStartIndices[strokeIndex];
+                    int end =
+                        strokeIndex + 1 < strokeStartIndices.Count
+                            ? strokeStartIndices[strokeIndex + 1]
+                            : points.Count;
+                    int count = end - start;
+
+                    if (count <= 0)
+                        continue;
+
+                    if (count == 1)
+                    {
+                        graphics.FillEllipse(
+                            Brushes.White,
+                            points[start].X - 4f,
+                            points[start].Y - 4f,
+                            8f,
+                            8f);
+                    }
+                    else
+                    {
+                        graphics.DrawLines(
+                            pen,
+                            ToPointArray(points, start, count));
+                    }
                 }
 
                 bitmap.Save(imagePath, ImageFormat.Png);
             }
         }
 
-        private static PointF[] ToPointArray(IList<PointF> points)
+        private static PointF[] ToPointArray(
+            IList<PointF> points,
+            int start,
+            int count)
         {
-            PointF[] result = new PointF[points.Count];
-            for (int i = 0; i < points.Count; i++)
-                result[i] = points[i];
+            PointF[] result = new PointF[count];
+            for (int i = 0; i < count; i++)
+                result[i] = points[start + i];
 
+            return result;
+        }
+
+        private static List<int> NormalizeStrokeStarts(
+            IList<int> strokeStartIndices,
+            int pointCount)
+        {
+            List<int> result = new List<int>();
+
+            if (pointCount <= 0)
+                return result;
+
+            result.Add(0);
+
+            if (strokeStartIndices == null)
+                return result;
+
+            for (int i = 0; i < strokeStartIndices.Count; i++)
+            {
+                int value = strokeStartIndices[i];
+
+                if (value <= 0 || value >= pointCount)
+                    continue;
+
+                if (!result.Contains(value))
+                    result.Add(value);
+            }
+
+            result.Sort();
             return result;
         }
 
@@ -240,6 +318,25 @@ namespace CSharp_YoloOnnx
             }
 
             writer.WriteLine("  ]" + (appendComma ? "," : string.Empty));
+        }
+
+        private static void WriteIntegerArray(
+            StreamWriter writer,
+            string name,
+            IList<int> values,
+            bool appendComma)
+        {
+            writer.Write("  \"" + name + "\": [");
+
+            for (int i = 0; i < values.Count; i++)
+            {
+                if (i > 0)
+                    writer.Write(", ");
+
+                writer.Write(values[i].ToString(CultureInfo.InvariantCulture));
+            }
+
+            writer.WriteLine("]" + (appendComma ? "," : string.Empty));
         }
 
         private static string EscapeJson(string value)

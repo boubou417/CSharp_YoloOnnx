@@ -38,18 +38,29 @@ namespace CSharp_YoloOnnx
         GameState gameState = GameState.Idle;
         List<PointF> drawingPoints = new List<PointF>();
         List<DateTime> drawingPointTimes = new List<DateTime>();
+        List<int> drawingStrokeStartIndices = new List<int>();
 
         const int MinimumDrawingPoints = 12;
         const int FinishedDisplayMs = 2500;
         const int StopGestureTailTrimMs = 350;
+        const int FingertipMissingBreakMs = 300;
+        const int FingertipMarkerVisibleMs = 200;
         const float MinimumPointDistance = 2f;
-        const float PointSmoothingFactor = 0.45f;
+        const float PointSmoothingFactor = 0.60f;
+        const float FingertipSmoothingFactor = 0.70f;
 
         DateTime drawingFinishedAt = DateTime.MinValue;
+        DateTime fingertipMissingSince = DateTime.MinValue;
+        DateTime lastFingertipSeenAt = DateTime.MinValue;
         string drawingStatusText = "舉起右手並停留 0.8 秒開始畫圖";
         string templateImagePath = string.Empty;
         double? lastDrawingScore;
         Button btnSelectTemplate;
+        FingertipTracker fingertipTracker;
+        PointF? lastFingertipPoint;
+        PointF? displayedFingertipPoint;
+        float displayedFingertipPresence;
+        bool drawingStrokeStartPending = true;
 
         InferenceSession yoloSession;
 
@@ -105,6 +116,8 @@ namespace CSharp_YoloOnnx
             pBox.SizeMode = PictureBoxSizeMode.Zoom;
             InitializeAirDrawControls();
             TryLoadDefaultTemplate();
+            InitializeFingertipTracker();
+            FormClosed += Form1_FormClosed;
 
             ManagedSystem system = new ManagedSystem();
             IList<IManagedCamera> camList = system.GetCameras();
@@ -121,6 +134,38 @@ namespace CSharp_YoloOnnx
 
             string modelPath = "yolov8n-pose.onnx";
             yoloSession = new InferenceSession(modelPath);
+        }
+
+        private void InitializeFingertipTracker()
+        {
+            string modelPath = Path.Combine(
+                AppDomain.CurrentDomain.BaseDirectory,
+                "Models",
+                "hand_landmark_full.tflite");
+
+            try
+            {
+                fingertipTracker = new FingertipTracker(modelPath);
+                Debug.WriteLine("Fingertip model = " + modelPath);
+            }
+            catch (Exception ex)
+            {
+                fingertipTracker = null;
+                drawingStatusText =
+                    "指尖模型無法載入｜請確認 Models/hand_landmark_full.tflite";
+                Debug.WriteLine("Fingertip tracker initialization error: " + ex);
+            }
+        }
+
+        private void Form1_FormClosed(object sender, FormClosedEventArgs e)
+        {
+            grabImage = false;
+
+            if (fingertipTracker != null)
+            {
+                fingertipTracker.Dispose();
+                fingertipTracker = null;
+            }
         }
 
         private void InitializeAirDrawControls()
@@ -275,7 +320,6 @@ namespace CSharp_YoloOnnx
                 isWaving = false;
                 var main = finalBoxes.OrderByDescending(d => d.W * d.H).FirstOrDefault();
 
-                UpdateGame(main);
                 //if (main != null)
                 //{
                 //    bool handRaised = IsRightHandRaised(main);
@@ -364,15 +408,24 @@ namespace CSharp_YoloOnnx
         {
             drawingPoints.Clear();
             drawingPointTimes.Clear();
+            drawingStrokeStartIndices.Clear();
             handTrail.Clear();
             rightHandHistory.Clear();
+            isWaving = false;
             handRaisedStart = DateTime.MinValue;
             handOnChestStart = DateTime.MinValue;
             drawingFinishedAt = DateTime.MinValue;
+            fingertipMissingSince = DateTime.MinValue;
+            lastFingertipSeenAt = DateTime.MinValue;
+            lastFingertipPoint = null;
+            displayedFingertipPoint = null;
+            displayedFingertipPresence = 0f;
+            drawingStrokeStartPending = true;
             lastDrawingScore = null;
 
             gameState = GameState.Drawing;
-            drawingStatusText = "繪圖中｜手放回胸前並停留 0.8 秒完成";
+            drawingStatusText =
+                "繪圖中（右手食指）｜手放回胸前並停留 0.8 秒完成";
 
             Debug.WriteLine("===== Start Drawing =====");
         }
@@ -384,8 +437,10 @@ namespace CSharp_YoloOnnx
 
             TrimStopGestureTail();
             rightHandHistory.Clear();
+            isWaving = false;
             handRaisedStart = DateTime.MinValue;
             handOnChestStart = DateTime.MinValue;
+            displayedFingertipPoint = null;
 
             Debug.WriteLine("===== Finish Drawing =====");
             Debug.WriteLine($"Trajectory Points = {drawingPoints.Count}");
@@ -408,6 +463,7 @@ namespace CSharp_YoloOnnx
 
                 AirDrawSaveResult saveResult = AirDrawStorage.Save(
                     drawingPoints,
+                    drawingStrokeStartIndices,
                     outputDirectory);
 
                 string selectedTemplate = templateImagePath;
@@ -457,8 +513,11 @@ namespace CSharp_YoloOnnx
                 return;
 
             PointF filteredPoint = pt;
+            bool startsNewStroke =
+                drawingStrokeStartPending ||
+                drawingPoints.Count == 0;
 
-            if (drawingPoints.Count > 0)
+            if (!startsNewStroke)
             {
                 PointF previous = drawingPoints[drawingPoints.Count - 1];
 
@@ -471,6 +530,12 @@ namespace CSharp_YoloOnnx
 
                 if (dx * dx + dy * dy < MinimumPointDistance * MinimumPointDistance)
                     return;
+            }
+
+            if (startsNewStroke)
+            {
+                drawingStrokeStartIndices.Add(drawingPoints.Count);
+                drawingStrokeStartPending = false;
             }
 
             drawingPoints.Add(filteredPoint);
@@ -504,9 +569,22 @@ namespace CSharp_YoloOnnx
 
             if (handTrail.Count >= keepCount + removeCount)
                 handTrail.RemoveRange(keepCount, removeCount);
+
+            for (int i = drawingStrokeStartIndices.Count - 1; i >= 0; i--)
+            {
+                if (drawingStrokeStartIndices[i] >= keepCount)
+                    drawingStrokeStartIndices.RemoveAt(i);
+            }
+
+            if (drawingPoints.Count > 0 &&
+                (drawingStrokeStartIndices.Count == 0 ||
+                 drawingStrokeStartIndices[0] != 0))
+            {
+                drawingStrokeStartIndices.Insert(0, 0);
+            }
         }
 
-        private void UpdateGame(Detection main)
+        private void UpdateGame(Detection main, Bitmap frame)
         {
             if (gameState == GameState.Finished)
             {
@@ -517,6 +595,14 @@ namespace CSharp_YoloOnnx
                     handTrail.Clear();
                     drawingPoints.Clear();
                     drawingPointTimes.Clear();
+                    drawingStrokeStartIndices.Clear();
+                    lastFingertipPoint = null;
+                    displayedFingertipPoint = null;
+                    displayedFingertipPresence = 0f;
+                    fingertipMissingSince = DateTime.MinValue;
+                    lastFingertipSeenAt = DateTime.MinValue;
+                    drawingStrokeStartPending = true;
+                    isWaving = false;
                     drawingStatusText =
                         string.IsNullOrWhiteSpace(templateImagePath)
                             ? "舉起右手並停留 0.8 秒開始畫圖"
@@ -535,6 +621,7 @@ namespace CSharp_YoloOnnx
             {
                 handRaisedStart = DateTime.MinValue;
                 handOnChestStart = DateTime.MinValue;
+                MarkFingertipMissing();
                 return;
             }
 
@@ -551,12 +638,10 @@ namespace CSharp_YoloOnnx
             var wrist = main.Keypoints[10];
 
             if (wrist.Score < 0.5f)
+            {
+                MarkFingertipMissing();
                 return;
-
-            float x = (wrist.X - _padX) / _ratio;
-            float y = (wrist.Y - _padY) / _ratio;
-
-            PointF pt = new PointF(x, y);
+            }
 
             switch (gameState)
             {
@@ -564,7 +649,16 @@ namespace CSharp_YoloOnnx
 
                     if (handRaised)
                     {
-                        StartDrawing();
+                        if (fingertipTracker == null)
+                        {
+                            handRaisedStart = DateTime.MinValue;
+                            drawingStatusText =
+                                "指尖模型未載入｜請確認模型與 TensorFlow Lite 套件";
+                        }
+                        else
+                        {
+                            StartDrawing();
+                        }
                     }
 
                     break;
@@ -572,21 +666,25 @@ namespace CSharp_YoloOnnx
                 case GameState.Drawing:
 
                     if (!rawHandOnChest)
-                        AddDrawingPoint(pt);
-
-                    //if (handTrail.Count > 20)
-                    //    handTrail.RemoveAt(0);
-                    rightHandHistory.Enqueue(x);
-
-                    if (rightHandHistory.Count > 12)
-                        rightHandHistory.Dequeue();
-
-                    if (rightHandHistory.Count >= 10)
                     {
-                        float minX = rightHandHistory.Min();
-                        float maxX = rightHandHistory.Max();
+                        PointF fingertip;
 
-                        isWaving = (maxX - minX) > 80;
+                        if (TryGetFingertipPoint(frame, main, out fingertip))
+                        {
+                            AddDrawingPoint(fingertip);
+                            drawingStatusText =
+                                "繪圖中（右手食指）｜手放回胸前並停留 0.8 秒完成";
+                        }
+                        else
+                        {
+                            MarkFingertipMissing();
+                            drawingStatusText =
+                                "正在尋找右手食指｜請伸直食指並面向相機";
+                        }
+                    }
+                    else
+                    {
+                        MarkFingertipMissing();
                     }
 
                     if (handOnChest)
@@ -606,6 +704,135 @@ namespace CSharp_YoloOnnx
                 case GameState.Scoring:
 
                     break;
+            }
+        }
+
+        private bool TryGetFingertipPoint(
+            Bitmap frame,
+            Detection person,
+            out PointF fingertip)
+        {
+            fingertip = PointF.Empty;
+
+            if (fingertipTracker == null ||
+                frame == null ||
+                person == null ||
+                person.Keypoints.Count <= 10)
+            {
+                return false;
+            }
+
+            Keypoint elbowKeypoint = person.Keypoints[8];
+            Keypoint wristKeypoint = person.Keypoints[10];
+
+            if (elbowKeypoint.Score < 0.5f ||
+                wristKeypoint.Score < 0.5f)
+            {
+                return false;
+            }
+
+            PointF elbow = KeypointToImagePoint(elbowKeypoint);
+            PointF wrist = KeypointToImagePoint(wristKeypoint);
+            FingertipResult result;
+
+            try
+            {
+                if (!fingertipTracker.TryDetect(
+                    frame,
+                    wrist,
+                    elbow,
+                    out result))
+                {
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("Fingertip inference error: " + ex);
+                return false;
+            }
+
+            PointF detected = result.IndexTip;
+            DateTime now = DateTime.Now;
+
+            if (lastFingertipPoint.HasValue &&
+                lastFingertipSeenAt != DateTime.MinValue &&
+                (now - lastFingertipSeenAt).TotalMilliseconds <
+                    FingertipMissingBreakMs)
+            {
+                PointF previous = lastFingertipPoint.Value;
+                float dx = detected.X - previous.X;
+                float dy = detected.Y - previous.Y;
+                float maximumJump = GetMaximumFingertipJump(person);
+
+                if (dx * dx + dy * dy > maximumJump * maximumJump)
+                    return false;
+
+                detected = new PointF(
+                    previous.X +
+                    (detected.X - previous.X) * FingertipSmoothingFactor,
+                    previous.Y +
+                    (detected.Y - previous.Y) * FingertipSmoothingFactor);
+            }
+
+            lastFingertipPoint = detected;
+            displayedFingertipPoint = detected;
+            displayedFingertipPresence = result.HandPresence;
+            lastFingertipSeenAt = now;
+            fingertipMissingSince = DateTime.MinValue;
+            fingertip = detected;
+
+            return true;
+        }
+
+        private PointF KeypointToImagePoint(Keypoint keypoint)
+        {
+            return new PointF(
+                (keypoint.X - _padX) / _ratio,
+                (keypoint.Y - _padY) / _ratio);
+        }
+
+        private float GetMaximumFingertipJump(Detection person)
+        {
+            if (person.Keypoints.Count <= 6 ||
+                person.Keypoints[5].Score < 0.5f ||
+                person.Keypoints[6].Score < 0.5f)
+                return 80f;
+
+            PointF leftShoulder =
+                KeypointToImagePoint(person.Keypoints[5]);
+            PointF rightShoulder =
+                KeypointToImagePoint(person.Keypoints[6]);
+            float dx = rightShoulder.X - leftShoulder.X;
+            float dy = rightShoulder.Y - leftShoulder.Y;
+            float shoulderWidth = (float)Math.Sqrt(dx * dx + dy * dy);
+
+            return Math.Max(80f, shoulderWidth * 0.65f);
+        }
+
+        private void MarkFingertipMissing()
+        {
+            if (gameState != GameState.Drawing)
+                return;
+
+            DateTime now = DateTime.Now;
+
+            if (fingertipMissingSince == DateTime.MinValue)
+                fingertipMissingSince = now;
+
+            if ((now - fingertipMissingSince).TotalMilliseconds >=
+                FingertipMissingBreakMs)
+            {
+                drawingStrokeStartPending = true;
+                lastFingertipPoint = null;
+            }
+
+            if (lastFingertipSeenAt == DateTime.MinValue ||
+                (now - lastFingertipSeenAt).TotalMilliseconds >=
+                    FingertipMarkerVisibleMs)
+            {
+                displayedFingertipPoint = null;
+                displayedFingertipPresence = 0f;
             }
         }
 
@@ -663,8 +890,21 @@ namespace CSharp_YoloOnnx
 
         private Bitmap CreateDisplayImage(IManagedImage img, List<Detection> boxes, Detection main)
         {
-            Bitmap bmp = new Bitmap((int)img.Width, (int)img.Height, (int)img.Stride, PixelFormat.Format24bppRgb, img.DataPtr);
-            Bitmap copy = new Bitmap(bmp);
+            Bitmap copy;
+
+            using (Bitmap bmp = new Bitmap(
+                (int)img.Width,
+                (int)img.Height,
+                (int)img.Stride,
+                PixelFormat.Format24bppRgb,
+                img.DataPtr))
+            {
+                copy = bmp.Clone(
+                    new Rectangle(0, 0, bmp.Width, bmp.Height),
+                    PixelFormat.Format24bppRgb);
+            }
+
+            UpdateGame(main, copy);
 
             using (Graphics g = Graphics.FromImage(copy))
             {
@@ -689,16 +929,7 @@ namespace CSharp_YoloOnnx
                 };
 
                 // 軌跡（畫在最上層前）
-                if (handTrail.Count > 1)
-                {
-                    using (Pen trailPen = new Pen(Color.Yellow, 4f))
-                    {
-                        trailPen.StartCap = LineCap.Round;
-                        trailPen.EndCap = LineCap.Round;
-                        trailPen.LineJoin = LineJoin.Round;
-                        g.DrawLines(trailPen, handTrail.ToArray());
-                    }
-                }
+                DrawHandTrail(g);
 
                 foreach (var b in boxes)
                 {
@@ -822,10 +1053,102 @@ namespace CSharp_YoloOnnx
                     g.DrawString(" HELLO!", new Font("Arial", 32, FontStyle.Bold), Brushes.Yellow, new PointF(10, 100));
                 }
 
+                DrawFingertipMarker(g);
                 DrawAirDrawStatus(g, copy.Width);
             }
 
             return copy;
+        }
+
+        private void DrawHandTrail(Graphics graphics)
+        {
+            if (handTrail.Count == 0)
+                return;
+
+            using (Pen trailPen = new Pen(Color.Yellow, 4f))
+            using (Brush pointBrush = new SolidBrush(Color.Yellow))
+            {
+                trailPen.StartCap = LineCap.Round;
+                trailPen.EndCap = LineCap.Round;
+                trailPen.LineJoin = LineJoin.Round;
+
+                for (int strokeIndex = 0;
+                    strokeIndex < drawingStrokeStartIndices.Count;
+                    strokeIndex++)
+                {
+                    int start = drawingStrokeStartIndices[strokeIndex];
+                    int end = Math.Min(
+                        strokeIndex + 1 < drawingStrokeStartIndices.Count
+                            ? drawingStrokeStartIndices[strokeIndex + 1]
+                            : handTrail.Count,
+                        handTrail.Count);
+                    int count = end - start;
+
+                    if (start < 0 ||
+                        start >= handTrail.Count ||
+                        count <= 0)
+                    {
+                        continue;
+                    }
+
+                    if (count == 1)
+                    {
+                        PointF point = handTrail[start];
+                        graphics.FillEllipse(
+                            pointBrush,
+                            point.X - 2f,
+                            point.Y - 2f,
+                            4f,
+                            4f);
+                    }
+                    else
+                    {
+                        PointF[] stroke = new PointF[count];
+                        handTrail.CopyTo(start, stroke, 0, count);
+                        graphics.DrawLines(trailPen, stroke);
+                    }
+                }
+            }
+        }
+
+        private void DrawFingertipMarker(Graphics graphics)
+        {
+            if (gameState != GameState.Drawing ||
+                !displayedFingertipPoint.HasValue)
+            {
+                return;
+            }
+
+            PointF point = displayedFingertipPoint.Value;
+
+            using (Pen outline = new Pen(Color.Cyan, 3f))
+            using (Brush center = new SolidBrush(Color.White))
+            using (Font font = new Font(
+                "Microsoft JhengHei UI",
+                10f,
+                FontStyle.Bold))
+            {
+                graphics.DrawEllipse(
+                    outline,
+                    point.X - 9f,
+                    point.Y - 9f,
+                    18f,
+                    18f);
+                graphics.FillEllipse(
+                    center,
+                    point.X - 3f,
+                    point.Y - 3f,
+                    6f,
+                    6f);
+                graphics.DrawString(
+                    "食指 " +
+                    (displayedFingertipPresence * 100f).ToString("0") +
+                    "%",
+                    font,
+                    Brushes.Cyan,
+                    point.X + 12f,
+                    point.Y - 12f);
+            }
         }
 
         private void DrawAirDrawStatus(Graphics graphics, int imageWidth)
