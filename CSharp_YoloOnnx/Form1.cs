@@ -312,14 +312,17 @@ namespace CSharp_YoloOnnx
 
                 CreateTensorFromFLIR(deepCopyImage, ref tensor);
 
-                var output = yoloSession.Run(new[]
+                List<Detection> finalBoxes;
+
+                using (var output = yoloSession.Run(new[]
                 {
                     NamedOnnxValue.CreateFromTensor("images", tensor)
-                });
-
-                Tensor<float> resultTensor = output.First().AsTensor<float>();
-
-                List<Detection> finalBoxes = PostProcess(resultTensor);
+                }))
+                {
+                    Tensor<float> resultTensor =
+                        output.First().AsTensor<float>();
+                    finalBoxes = PostProcess(resultTensor);
+                }
 
                 // 🔥 揮手偵測（主角：最大人）
                 isWaving = false;
@@ -869,6 +872,7 @@ namespace CSharp_YoloOnnx
         {
             Image old = pBox.Image;
             pBox.Image = bmp;
+            pBox.Refresh();
             old?.Dispose();
         }
 
@@ -1015,13 +1019,22 @@ namespace CSharp_YoloOnnx
             UpdateGame(main, copy);
 
             using (Graphics g = Graphics.FromImage(copy))
+            using (Pen mainPen = new Pen(Color.Lime, 3))
+            using (Pen otherPen = new Pen(
+                Color.FromArgb(120, 200, 200, 200),
+                1))
+            using (Pen boxPen = new Pen(Color.Red, 2))
+            using (Pen eyePen = new Pen(Color.Magenta, 3))
             {
                 g.SmoothingMode = SmoothingMode.AntiAlias;
                 g.InterpolationMode = InterpolationMode.HighQualityBicubic;
 
-                Pen mainPen = new Pen(Color.Lime, 3) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round };
-                Pen otherPen = new Pen(Color.FromArgb(120, 200, 200, 200), 1) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round };
-                Pen boxPen = new Pen(Color.Red, 2);
+                mainPen.StartCap = LineCap.Round;
+                mainPen.EndCap = LineCap.Round;
+                mainPen.LineJoin = LineJoin.Round;
+                otherPen.StartCap = LineCap.Round;
+                otherPen.EndCap = LineCap.Round;
+                otherPen.LineJoin = LineJoin.Round;
 
                 // 自訂骨架
                 int[,] skeleton = new int[,]
@@ -1121,7 +1134,7 @@ namespace CSharp_YoloOnnx
 
                     if (eyeL.Score > 0.5f && nose.Score > 0.5f)
                     {
-                        g.DrawLine(new Pen(Color.Magenta, 3),
+                        g.DrawLine(eyePen,
                             (eyeL.X - _padX) / _ratio,
                             (eyeL.Y - _padY) / _ratio,
                             (nose.X - _padX) / _ratio,
@@ -1130,7 +1143,7 @@ namespace CSharp_YoloOnnx
 
                     if (eyeR.Score > 0.5f && nose.Score > 0.5f)
                     {
-                        g.DrawLine(new Pen(Color.Magenta, 3),
+                        g.DrawLine(eyePen,
                             (eyeR.X - _padX) / _ratio,
                             (eyeR.Y - _padY) / _ratio,
                             (nose.X - _padX) / _ratio,
@@ -1150,22 +1163,80 @@ namespace CSharp_YoloOnnx
                         float x2 = (midX - _padX) / _ratio;
                         float y2 = (midY - _padY) / _ratio;
 
-                        g.DrawLine(new Pen(Color.Cyan, isMain ? 3 : 1), x1, y1, x2, y2);
+                        using (Pen torsoPen = new Pen(
+                            Color.Cyan,
+                            isMain ? 3 : 1))
+                        {
+                            g.DrawLine(
+                                torsoPen,
+                                x1,
+                                y1,
+                                x2,
+                                y2);
+                        }
                     }
                 }
 
                 // HELLO UI
                 if (isWaving)
                 {
-                    g.FillRectangle(new SolidBrush(Color.FromArgb(120, 0, 0, 0)), 5, 5, 260, 60);
-                    g.DrawString(" HELLO!", new Font("Arial", 32, FontStyle.Bold), Brushes.Yellow, new PointF(10, 100));
+                    using (Brush helloBackground =
+                        new SolidBrush(Color.FromArgb(120, 0, 0, 0)))
+                    using (Font helloFont = new Font(
+                        "Arial",
+                        32,
+                        FontStyle.Bold))
+                    {
+                        g.FillRectangle(
+                            helloBackground,
+                            5,
+                            5,
+                            260,
+                            60);
+                        g.DrawString(
+                            " HELLO!",
+                            helloFont,
+                            Brushes.Yellow,
+                            new PointF(10, 100));
+                    }
                 }
 
                 DrawFingertipMarker(g);
                 DrawAirDrawStatus(g, copy.Width);
+                DrawLiveDiagnostics(g, boxes.Count);
             }
 
             return copy;
+        }
+
+        private void DrawLiveDiagnostics(
+            Graphics graphics,
+            int personCount)
+        {
+            string text = "LIVE | YOLO persons: " + personCount;
+
+            using (Font font = new Font(
+                "Microsoft JhengHei UI",
+                10f,
+                FontStyle.Bold))
+            using (Brush background =
+                new SolidBrush(Color.FromArgb(170, 0, 0, 0)))
+            {
+                SizeF textSize = graphics.MeasureString(text, font);
+                RectangleF backgroundBounds = new RectangleF(
+                    8f,
+                    8f,
+                    textSize.Width + 16f,
+                    textSize.Height + 8f);
+
+                graphics.FillRectangle(background, backgroundBounds);
+                graphics.DrawString(
+                    text,
+                    font,
+                    Brushes.Lime,
+                    16f,
+                    12f);
+            }
         }
 
         private void DrawHandTrail(Graphics graphics)
