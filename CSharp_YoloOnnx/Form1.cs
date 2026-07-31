@@ -111,6 +111,7 @@ namespace CSharp_YoloOnnx
         {
             InitializeComponent();
 
+            Text = "CSharp YOLO ONNX V1.1";
             panelToolBar.Dock = DockStyle.Top;
             panelToolBar.Height = 40;
             panelStatusBar.Dock = DockStyle.Bottom;
@@ -1002,19 +1003,7 @@ namespace CSharp_YoloOnnx
 
         private Bitmap CreateDisplayImage(IManagedImage img, List<Detection> boxes, Detection main)
         {
-            Bitmap copy;
-
-            using (Bitmap bmp = new Bitmap(
-                (int)img.Width,
-                (int)img.Height,
-                (int)img.Stride,
-                PixelFormat.Format24bppRgb,
-                img.DataPtr))
-            {
-                copy = bmp.Clone(
-                    new Rectangle(0, 0, bmp.Width, bmp.Height),
-                    PixelFormat.Format24bppRgb);
-            }
+            Bitmap copy = CopyManagedImageToBitmap(img);
 
             UpdateGame(main, copy);
 
@@ -1207,6 +1196,76 @@ namespace CSharp_YoloOnnx
             }
 
             return copy;
+        }
+
+        private unsafe Bitmap CopyManagedImageToBitmap(
+            IManagedImage image)
+        {
+            int width = (int)image.Width;
+            int height = (int)image.Height;
+            int sourceStride = (int)image.Stride;
+            int rowBytes = width * 3;
+
+            Bitmap bitmap = new Bitmap(
+                width,
+                height,
+                PixelFormat.Format24bppRgb);
+
+            try
+            {
+                Rectangle bounds = new Rectangle(
+                    0,
+                    0,
+                    width,
+                    height);
+                BitmapData bitmapData = bitmap.LockBits(
+                    bounds,
+                    ImageLockMode.WriteOnly,
+                    PixelFormat.Format24bppRgb);
+
+                try
+                {
+                    byte* sourceBase =
+                        (byte*)image.DataPtr.ToPointer();
+                    byte* destinationBase =
+                        (byte*)bitmapData.Scan0.ToPointer();
+                    int destinationStride = bitmapData.Stride;
+
+                    for (int y = 0; y < height; y++)
+                    {
+                        byte* sourceRow =
+                            sourceStride >= 0
+                                ? sourceBase + y * sourceStride
+                                : sourceBase +
+                                  (height - 1 - y) *
+                                  -sourceStride;
+                        byte* destinationRow =
+                            destinationStride >= 0
+                                ? destinationBase +
+                                  y * destinationStride
+                                : destinationBase +
+                                  (height - 1 - y) *
+                                  -destinationStride;
+
+                        Buffer.MemoryCopy(
+                            sourceRow,
+                            destinationRow,
+                            Math.Abs(destinationStride),
+                            rowBytes);
+                    }
+                }
+                finally
+                {
+                    bitmap.UnlockBits(bitmapData);
+                }
+
+                return bitmap;
+            }
+            catch
+            {
+                bitmap.Dispose();
+                throw;
+            }
         }
 
         private void DrawLiveDiagnostics(
