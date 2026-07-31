@@ -46,14 +46,19 @@ namespace CSharp_YoloOnnx
         const int FingertipMissingBreakMs = 300;
         const int FingertipMarkerVisibleMs = 200;
         const int FingertipInferenceIntervalMs = 67;
+        const int PinchFinishDelayMs = 600;
+        const int PinchTailTrimMs = 250;
         const float MinimumPointDistance = 2f;
         const float PointSmoothingFactor = 0.60f;
         const float FingertipSmoothingFactor = 0.70f;
+        const float PinchStartRatio = 0.32f;
+        const float PinchReleaseRatio = 0.42f;
 
         DateTime drawingFinishedAt = DateTime.MinValue;
         DateTime fingertipMissingSince = DateTime.MinValue;
         DateTime lastFingertipSeenAt = DateTime.MinValue;
         DateTime lastFingertipInferenceAt = DateTime.MinValue;
+        DateTime pinchStartedAt = DateTime.MinValue;
         string drawingStatusText = "舉起右手並停留 0.8 秒開始畫圖";
         string templateImagePath = string.Empty;
         double? lastDrawingScore;
@@ -61,8 +66,11 @@ namespace CSharp_YoloOnnx
         FingertipTracker fingertipTracker;
         PointF? lastFingertipPoint;
         PointF? displayedFingertipPoint;
+        PointF? displayedThumbPoint;
         float displayedFingertipPresence;
+        float latestPinchRatio = float.MaxValue;
         bool drawingStrokeStartPending = true;
+        bool pinchInProgress;
         Bitmap pendingDisplayImage;
         int displayUpdateScheduled;
 
@@ -432,28 +440,34 @@ namespace CSharp_YoloOnnx
             lastFingertipInferenceAt = DateTime.MinValue;
             lastFingertipPoint = null;
             displayedFingertipPoint = null;
+            displayedThumbPoint = null;
             displayedFingertipPresence = 0f;
+            ResetPinchGesture(false);
             drawingStrokeStartPending = true;
             lastDrawingScore = null;
 
             gameState = GameState.Drawing;
             drawingStatusText =
-                "繪圖中（右手食指）｜手放回胸前並停留 0.8 秒完成";
+                "繪圖中（右手食指）｜食指與拇指捏合 0.6 秒完成";
 
             Debug.WriteLine("===== Start Drawing =====");
         }
 
-        private void StopDrawing()
+        private void StopDrawing(
+            DateTime gestureStartedAt,
+            int tailTrimMs)
         {
             if (gameState != GameState.Drawing)
                 return;
 
-            TrimStopGestureTail();
+            TrimGestureTail(gestureStartedAt, tailTrimMs);
+            ResetPinchGesture(false);
             rightHandHistory.Clear();
             isWaving = false;
             handRaisedStart = DateTime.MinValue;
             handOnChestStart = DateTime.MinValue;
             displayedFingertipPoint = null;
+            displayedThumbPoint = null;
 
             Debug.WriteLine("===== Finish Drawing =====");
             Debug.WriteLine($"Trajectory Points = {drawingPoints.Count}");
@@ -556,18 +570,21 @@ namespace CSharp_YoloOnnx
             handTrail.Add(filteredPoint);
         }
 
-        private void TrimStopGestureTail()
+        private void TrimGestureTail(
+            DateTime gestureStartedAt,
+            int tailTrimMs)
         {
             if (drawingPoints.Count == 0 ||
                 drawingPointTimes.Count != drawingPoints.Count)
                 return;
 
-            DateTime chestDetectedAt =
-                handOnChestStart == DateTime.MinValue
+            DateTime detectedAt =
+                gestureStartedAt == DateTime.MinValue
                     ? DateTime.Now
-                    : handOnChestStart;
+                    : gestureStartedAt;
 
-            DateTime cutoff = chestDetectedAt.AddMilliseconds(-StopGestureTailTrimMs);
+            DateTime cutoff =
+                detectedAt.AddMilliseconds(-tailTrimMs);
             int keepCount = drawingPointTimes.Count;
 
             while (keepCount > 0 && drawingPointTimes[keepCount - 1] >= cutoff)
@@ -611,11 +628,13 @@ namespace CSharp_YoloOnnx
                     drawingStrokeStartIndices.Clear();
                     lastFingertipPoint = null;
                     displayedFingertipPoint = null;
+                    displayedThumbPoint = null;
                     displayedFingertipPresence = 0f;
                     fingertipMissingSince = DateTime.MinValue;
                     lastFingertipSeenAt = DateTime.MinValue;
                     lastFingertipInferenceAt = DateTime.MinValue;
                     drawingStrokeStartPending = true;
+                    ResetPinchGesture(false);
                     isWaving = false;
                     drawingStatusText =
                         string.IsNullOrWhiteSpace(templateImagePath)
@@ -685,12 +704,36 @@ namespace CSharp_YoloOnnx
 
                         if (TryGetFingertipPoint(frame, main, out fingertip))
                         {
-                            AddDrawingPoint(fingertip);
-                            drawingStatusText =
-                                "繪圖中（右手食指）｜手放回胸前並停留 0.8 秒完成";
+                            if (UpdatePinchGesture(DateTime.Now))
+                            {
+                                DateTime pinchDetectedAt =
+                                    pinchStartedAt;
+                                StopDrawing(
+                                    pinchDetectedAt,
+                                    PinchTailTrimMs);
+                                break;
+                            }
+
+                            if (pinchInProgress)
+                            {
+                                int progress =
+                                    GetPinchProgressPercent(
+                                        DateTime.Now);
+                                drawingStatusText =
+                                    "捏合完成 " +
+                                    progress +
+                                    "%｜放開可取消";
+                            }
+                            else
+                            {
+                                AddDrawingPoint(fingertip);
+                                drawingStatusText =
+                                    "繪圖中（右手食指）｜捏合 0.6 秒完成";
+                            }
                         }
                         else
                         {
+                            ResetPinchGesture(true);
                             MarkFingertipMissing();
                             drawingStatusText =
                                 "正在尋找右手食指｜請伸直食指並面向相機";
@@ -698,12 +741,15 @@ namespace CSharp_YoloOnnx
                     }
                     else
                     {
+                        ResetPinchGesture(true);
                         MarkFingertipMissing();
                     }
 
                     if (handOnChest)
                     {
-                        StopDrawing();
+                        StopDrawing(
+                            handOnChestStart,
+                            StopGestureTailTrimMs);
                     }
 
                     break;
@@ -810,12 +856,68 @@ namespace CSharp_YoloOnnx
 
             lastFingertipPoint = detected;
             displayedFingertipPoint = detected;
+            displayedThumbPoint = result.ThumbTip;
             displayedFingertipPresence = result.HandPresence;
+            latestPinchRatio = result.PinchRatio;
             lastFingertipSeenAt = now;
             fingertipMissingSince = DateTime.MinValue;
             fingertip = detected;
 
             return true;
+        }
+
+        private bool UpdatePinchGesture(DateTime now)
+        {
+            if (!pinchInProgress)
+            {
+                if (latestPinchRatio > PinchStartRatio)
+                    return false;
+
+                pinchInProgress = true;
+                pinchStartedAt = now;
+                drawingStrokeStartPending = true;
+            }
+            else if (latestPinchRatio >= PinchReleaseRatio)
+            {
+                ResetPinchGesture(true);
+                return false;
+            }
+
+            return
+                (now - pinchStartedAt).TotalMilliseconds >=
+                PinchFinishDelayMs;
+        }
+
+        private int GetPinchProgressPercent(DateTime now)
+        {
+            if (!pinchInProgress ||
+                pinchStartedAt == DateTime.MinValue)
+            {
+                return 0;
+            }
+
+            double progress =
+                (now - pinchStartedAt).TotalMilliseconds /
+                PinchFinishDelayMs;
+
+            return (int)Math.Max(
+                0d,
+                Math.Min(100d, progress * 100d));
+        }
+
+        private void ResetPinchGesture(bool startNewStroke)
+        {
+            bool wasPinching = pinchInProgress;
+
+            pinchInProgress = false;
+            pinchStartedAt = DateTime.MinValue;
+            latestPinchRatio = float.MaxValue;
+
+            if (startNewStroke && wasPinching)
+            {
+                drawingStrokeStartPending = true;
+                lastFingertipPoint = null;
+            }
         }
 
         private PointF KeypointToImagePoint(Keypoint keypoint)
@@ -848,6 +950,7 @@ namespace CSharp_YoloOnnx
             if (gameState != GameState.Drawing)
                 return;
 
+            ResetPinchGesture(true);
             DateTime now = DateTime.Now;
 
             if (fingertipMissingSince == DateTime.MinValue)
@@ -865,6 +968,7 @@ namespace CSharp_YoloOnnx
                     FingertipMarkerVisibleMs)
             {
                 displayedFingertipPoint = null;
+                displayedThumbPoint = null;
                 displayedFingertipPresence = 0f;
             }
         }
@@ -1360,6 +1464,9 @@ namespace CSharp_YoloOnnx
             PointF point = displayedFingertipPoint.Value;
 
             using (Pen outline = new Pen(Color.Cyan, 3f))
+            using (Pen thumbOutline = new Pen(Color.Magenta, 3f))
+            using (Pen pinchLine = new Pen(Color.Orange, 2f))
+            using (Pen progressPen = new Pen(Color.Orange, 4f))
             using (Brush center = new SolidBrush(Color.White))
             using (Font font = new Font(
                 "Microsoft JhengHei UI",
@@ -1386,6 +1493,51 @@ namespace CSharp_YoloOnnx
                     Brushes.Cyan,
                     point.X + 12f,
                     point.Y - 12f);
+
+                if (displayedThumbPoint.HasValue)
+                {
+                    PointF thumb = displayedThumbPoint.Value;
+
+                    graphics.DrawEllipse(
+                        thumbOutline,
+                        thumb.X - 7f,
+                        thumb.Y - 7f,
+                        14f,
+                        14f);
+
+                    if (pinchInProgress)
+                    {
+                        graphics.DrawLine(
+                            pinchLine,
+                            thumb,
+                            point);
+
+                        float progress =
+                            GetPinchProgressPercent(DateTime.Now) /
+                            100f;
+                        graphics.DrawArc(
+                            progressPen,
+                            point.X - 14f,
+                            point.Y - 14f,
+                            28f,
+                            28f,
+                            -90f,
+                            360f * progress);
+                    }
+                }
+
+                if (latestPinchRatio < float.MaxValue)
+                {
+                    graphics.DrawString(
+                        "捏合 " +
+                        latestPinchRatio.ToString("0.00"),
+                        font,
+                        pinchInProgress
+                            ? Brushes.Orange
+                            : Brushes.Magenta,
+                        point.X + 12f,
+                        point.Y + 6f);
+                }
             }
         }
 

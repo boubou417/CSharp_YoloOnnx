@@ -11,6 +11,8 @@ namespace CSharp_YoloOnnx
     public sealed class FingertipResult
     {
         public PointF IndexTip { get; set; }
+        public PointF ThumbTip { get; set; }
+        public float PinchRatio { get; set; }
         public float HandPresence { get; set; }
         public RectangleF SearchRegion { get; set; }
     }
@@ -25,7 +27,11 @@ namespace CSharp_YoloOnnx
         private const int ModelInputSize = 224;
         private const int LandmarkValueCount = 21 * 3;
         private const int WristLandmarkIndex = 0;
+        private const int ThumbTipLandmarkIndex = 4;
+        private const int IndexMcpLandmarkIndex = 5;
         private const int IndexTipLandmarkIndex = 8;
+        private const int MiddleMcpLandmarkIndex = 9;
+        private const int PinkyMcpLandmarkIndex = 17;
         private const float MinimumHandPresence = 0.55f;
         private const float CropSizeFromForearm = 1.8f;
         private const float CropCenterFromWrist = 0.35f;
@@ -125,12 +131,44 @@ namespace CSharp_YoloOnnx
                 PointF modelIndexTip = ReadLandmark(
                     landmarks,
                     IndexTipLandmarkIndex);
+                PointF modelThumbTip = ReadLandmark(
+                    landmarks,
+                    ThumbTipLandmarkIndex);
+                PointF modelMiddleMcp = ReadLandmark(
+                    landmarks,
+                    MiddleMcpLandmarkIndex);
+                PointF modelIndexMcp = ReadLandmark(
+                    landmarks,
+                    IndexMcpLandmarkIndex);
+                PointF modelPinkyMcp = ReadLandmark(
+                    landmarks,
+                    PinkyMcpLandmarkIndex);
+
+                float palmLength = Distance(
+                    modelWrist,
+                    modelMiddleMcp);
+                float palmWidth = Distance(
+                    modelIndexMcp,
+                    modelPinkyMcp);
+                float handScale = Math.Max(palmLength, palmWidth);
+
+                if (handScale < 1f)
+                    return false;
+
+                float pinchRatio =
+                    Distance(modelThumbTip, modelIndexTip) /
+                    handScale;
                 PointF indexTip = transform.MapToFrame(modelIndexTip);
+                PointF thumbTip = transform.MapToFrame(modelThumbTip);
 
                 if (indexTip.X < 0f ||
                     indexTip.Y < 0f ||
                     indexTip.X >= frame.Width ||
-                    indexTip.Y >= frame.Height)
+                    indexTip.Y >= frame.Height ||
+                    thumbTip.X < 0f ||
+                    thumbTip.Y < 0f ||
+                    thumbTip.X >= frame.Width ||
+                    thumbTip.Y >= frame.Height)
                 {
                     return false;
                 }
@@ -138,6 +176,8 @@ namespace CSharp_YoloOnnx
                 result = new FingertipResult
                 {
                     IndexTip = indexTip,
+                    ThumbTip = thumbTip,
+                    PinchRatio = pinchRatio,
                     HandPresence = handPresence,
                     SearchRegion = transform.AxisAlignedBounds
                 };
@@ -462,6 +502,13 @@ namespace CSharp_YoloOnnx
         {
             int offset = index * 3;
             return new PointF(values[offset], values[offset + 1]);
+        }
+
+        private static float Distance(PointF first, PointF second)
+        {
+            float dx = second.X - first.X;
+            float dy = second.Y - first.Y;
+            return (float)Math.Sqrt(dx * dx + dy * dy);
         }
 
         public void Dispose()
