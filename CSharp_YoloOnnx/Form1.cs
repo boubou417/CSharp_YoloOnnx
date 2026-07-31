@@ -45,6 +45,7 @@ namespace CSharp_YoloOnnx
         const int StopGestureTailTrimMs = 350;
         const int FingertipMissingBreakMs = 300;
         const int FingertipMarkerVisibleMs = 200;
+        const int FingertipInferenceIntervalMs = 67;
         const float MinimumPointDistance = 2f;
         const float PointSmoothingFactor = 0.60f;
         const float FingertipSmoothingFactor = 0.70f;
@@ -52,6 +53,7 @@ namespace CSharp_YoloOnnx
         DateTime drawingFinishedAt = DateTime.MinValue;
         DateTime fingertipMissingSince = DateTime.MinValue;
         DateTime lastFingertipSeenAt = DateTime.MinValue;
+        DateTime lastFingertipInferenceAt = DateTime.MinValue;
         string drawingStatusText = "舉起右手並停留 0.8 秒開始畫圖";
         string templateImagePath = string.Empty;
         double? lastDrawingScore;
@@ -61,6 +63,8 @@ namespace CSharp_YoloOnnx
         PointF? displayedFingertipPoint;
         float displayedFingertipPresence;
         bool drawingStrokeStartPending = true;
+        Bitmap pendingDisplayImage;
+        int displayUpdateScheduled;
 
         InferenceSession yoloSession;
 
@@ -160,6 +164,7 @@ namespace CSharp_YoloOnnx
         private void Form1_FormClosed(object sender, FormClosedEventArgs e)
         {
             grabImage = false;
+            DisposePendingDisplayImage();
 
             if (fingertipTracker != null)
             {
@@ -397,8 +402,11 @@ namespace CSharp_YoloOnnx
                 //    }
                 //}
 
-                Bitmap displayBmp = CreateDisplayImage(deepCopyImage, finalBoxes, main);
-                pBox.BeginInvoke(new InvokeDelegate(pictureBoxInvoke), displayBmp);
+                Bitmap displayBmp = CreateDisplayImage(
+                    deepCopyImage,
+                    finalBoxes,
+                    main);
+                QueueDisplayImage(displayBmp);
             }
 
             threadComplete = true;
@@ -417,6 +425,7 @@ namespace CSharp_YoloOnnx
             drawingFinishedAt = DateTime.MinValue;
             fingertipMissingSince = DateTime.MinValue;
             lastFingertipSeenAt = DateTime.MinValue;
+            lastFingertipInferenceAt = DateTime.MinValue;
             lastFingertipPoint = null;
             displayedFingertipPoint = null;
             displayedFingertipPresence = 0f;
@@ -601,6 +610,7 @@ namespace CSharp_YoloOnnx
                     displayedFingertipPresence = 0f;
                     fingertipMissingSince = DateTime.MinValue;
                     lastFingertipSeenAt = DateTime.MinValue;
+                    lastFingertipInferenceAt = DateTime.MinValue;
                     drawingStrokeStartPending = true;
                     isWaving = false;
                     drawingStatusText =
@@ -722,6 +732,26 @@ namespace CSharp_YoloOnnx
                 return false;
             }
 
+            DateTime now = DateTime.Now;
+
+            if (lastFingertipInferenceAt != DateTime.MinValue &&
+                (now - lastFingertipInferenceAt).TotalMilliseconds <
+                    FingertipInferenceIntervalMs)
+            {
+                if (lastFingertipPoint.HasValue &&
+                    lastFingertipSeenAt != DateTime.MinValue &&
+                    (now - lastFingertipSeenAt).TotalMilliseconds <
+                        FingertipMarkerVisibleMs)
+                {
+                    fingertip = lastFingertipPoint.Value;
+                    return true;
+                }
+
+                return false;
+            }
+
+            lastFingertipInferenceAt = now;
+
             Keypoint elbowKeypoint = person.Keypoints[8];
             Keypoint wristKeypoint = person.Keypoints[10];
 
@@ -753,7 +783,6 @@ namespace CSharp_YoloOnnx
             }
 
             PointF detected = result.IndexTip;
-            DateTime now = DateTime.Now;
 
             if (lastFingertipPoint.HasValue &&
                 lastFingertipSeenAt != DateTime.MinValue &&
@@ -841,6 +870,85 @@ namespace CSharp_YoloOnnx
             Image old = pBox.Image;
             pBox.Image = bmp;
             old?.Dispose();
+        }
+
+        private void QueueDisplayImage(Bitmap bitmap)
+        {
+            if (bitmap == null)
+                return;
+
+            if (IsDisposed || Disposing || pBox.IsDisposed)
+            {
+                bitmap.Dispose();
+                return;
+            }
+
+            Bitmap replaced = Interlocked.Exchange(
+                ref pendingDisplayImage,
+                bitmap);
+            replaced?.Dispose();
+
+            ScheduleDisplayUpdate();
+        }
+
+        private void ScheduleDisplayUpdate()
+        {
+            if (Interlocked.CompareExchange(
+                ref displayUpdateScheduled,
+                1,
+                0) != 0)
+            {
+                return;
+            }
+
+            try
+            {
+                pBox.BeginInvoke(
+                    new MethodInvoker(PresentLatestDisplayImage));
+            }
+            catch (ObjectDisposedException)
+            {
+                Interlocked.Exchange(ref displayUpdateScheduled, 0);
+                DisposePendingDisplayImage();
+            }
+            catch (InvalidOperationException)
+            {
+                Interlocked.Exchange(ref displayUpdateScheduled, 0);
+                DisposePendingDisplayImage();
+            }
+        }
+
+        private void PresentLatestDisplayImage()
+        {
+            Bitmap latest = Interlocked.Exchange(
+                ref pendingDisplayImage,
+                null);
+
+            if (latest != null)
+            {
+                if (IsDisposed || Disposing || pBox.IsDisposed)
+                    latest.Dispose();
+                else
+                    pictureBoxInvoke(latest);
+            }
+
+            Interlocked.Exchange(ref displayUpdateScheduled, 0);
+
+            if (Interlocked.CompareExchange(
+                ref pendingDisplayImage,
+                null,
+                null) != null)
+            {
+                ScheduleDisplayUpdate();
+            }
+        }
+
+        private void DisposePendingDisplayImage()
+        {
+            Bitmap pending = Interlocked.Exchange(
+                ref pendingDisplayImage,
+                null);
+            pending?.Dispose();
         }
 
         private void CreateTensorFromFLIR(IManagedImage img, ref DenseTensor<float> tensor)
