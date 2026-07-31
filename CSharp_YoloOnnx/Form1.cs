@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Windows.Forms;
@@ -36,6 +37,19 @@ namespace CSharp_YoloOnnx
 
         GameState gameState = GameState.Idle;
         List<PointF> drawingPoints = new List<PointF>();
+        List<DateTime> drawingPointTimes = new List<DateTime>();
+
+        const int MinimumDrawingPoints = 12;
+        const int FinishedDisplayMs = 2500;
+        const int StopGestureTailTrimMs = 350;
+        const float MinimumPointDistance = 2f;
+        const float PointSmoothingFactor = 0.45f;
+
+        DateTime drawingFinishedAt = DateTime.MinValue;
+        string drawingStatusText = "舉起右手並停留 0.8 秒開始畫圖";
+        string templateImagePath = string.Empty;
+        double? lastDrawingScore;
+        Button btnSelectTemplate;
 
         InferenceSession yoloSession;
 
@@ -89,6 +103,8 @@ namespace CSharp_YoloOnnx
             panelImage.Dock = DockStyle.Fill;
             pBox.Dock = DockStyle.Fill;
             pBox.SizeMode = PictureBoxSizeMode.Zoom;
+            InitializeAirDrawControls();
+            TryLoadDefaultTemplate();
 
             ManagedSystem system = new ManagedSystem();
             IList<IManagedCamera> camList = system.GetCameras();
@@ -105,6 +121,56 @@ namespace CSharp_YoloOnnx
 
             string modelPath = "yolov8n-pose.onnx";
             yoloSession = new InferenceSession(modelPath);
+        }
+
+        private void InitializeAirDrawControls()
+        {
+            btnSelectTemplate = new Button
+            {
+                Name = "btnSelectTemplate",
+                Text = "選擇比對圖",
+                Width = 110,
+                Height = 26,
+                Left = btnGrab.Right + 20,
+                Top = 7
+            };
+
+            btnSelectTemplate.Click += btnSelectTemplate_Click;
+            panelToolBar.Controls.Add(btnSelectTemplate);
+        }
+
+        private void TryLoadDefaultTemplate()
+        {
+            string defaultTemplatePath = Path.Combine(
+                AppDomain.CurrentDomain.BaseDirectory,
+                "Templates",
+                "template.png");
+
+            if (!File.Exists(defaultTemplatePath))
+                return;
+
+            templateImagePath = defaultTemplatePath;
+            drawingStatusText = "比對圖：" + Path.GetFileName(templateImagePath) + "｜舉起右手開始";
+        }
+
+        private void btnSelectTemplate_Click(object sender, EventArgs e)
+        {
+            using (OpenFileDialog dialog = new OpenFileDialog())
+            {
+                dialog.Title = "選擇要比對的字卡或圖卡";
+                dialog.Filter =
+                    "圖片檔案|*.png;*.jpg;*.jpeg;*.bmp|" +
+                    "所有檔案|*.*";
+
+                if (dialog.ShowDialog(this) != DialogResult.OK)
+                    return;
+
+                templateImagePath = dialog.FileName;
+                drawingStatusText =
+                    "比對圖：" +
+                    Path.GetFileName(templateImagePath) +
+                    "｜舉起右手開始";
+            }
         }
 
         private void StreamBufferMode(INodeMap nodeMap)
@@ -297,21 +363,92 @@ namespace CSharp_YoloOnnx
         private void StartDrawing()
         {
             drawingPoints.Clear();
+            drawingPointTimes.Clear();
+            handTrail.Clear();
+            rightHandHistory.Clear();
+            handRaisedStart = DateTime.MinValue;
+            handOnChestStart = DateTime.MinValue;
+            drawingFinishedAt = DateTime.MinValue;
+            lastDrawingScore = null;
 
             gameState = GameState.Drawing;
+            drawingStatusText = "繪圖中｜手放回胸前並停留 0.8 秒完成";
 
             Debug.WriteLine("===== Start Drawing =====");
         }
 
         private void StopDrawing()
         {
-            gameState = GameState.Finished;
+            if (gameState != GameState.Drawing)
+                return;
 
+            TrimStopGestureTail();
             rightHandHistory.Clear();
-            handTrail.Clear();
+            handRaisedStart = DateTime.MinValue;
+            handOnChestStart = DateTime.MinValue;
 
             Debug.WriteLine("===== Finish Drawing =====");
             Debug.WriteLine($"Trajectory Points = {drawingPoints.Count}");
+
+            if (drawingPoints.Count < MinimumDrawingPoints)
+            {
+                drawingStatusText = "軌跡太短，未儲存｜請重新舉手畫圖";
+                drawingFinishedAt = DateTime.Now;
+                gameState = GameState.Finished;
+                return;
+            }
+
+            try
+            {
+                gameState = GameState.Scoring;
+
+                string outputDirectory = Path.Combine(
+                    AppDomain.CurrentDomain.BaseDirectory,
+                    "Drawings");
+
+                AirDrawSaveResult saveResult = AirDrawStorage.Save(
+                    drawingPoints,
+                    outputDirectory);
+
+                string selectedTemplate = templateImagePath;
+
+                if (!string.IsNullOrWhiteSpace(selectedTemplate) &&
+                    File.Exists(selectedTemplate))
+                {
+                    lastDrawingScore = AirDrawComparer.Compare(
+                        saveResult.ImagePath,
+                        selectedTemplate);
+
+                    AirDrawStorage.WriteMetadata(
+                        saveResult,
+                        selectedTemplate,
+                        lastDrawingScore);
+
+                    drawingStatusText =
+                        "完成｜相似度 " +
+                        lastDrawingScore.Value.ToString("0.0") +
+                        " 分｜" +
+                        Path.GetFileName(saveResult.ImagePath);
+                }
+                else
+                {
+                    drawingStatusText =
+                        "完成並儲存｜尚未選擇比對圖｜" +
+                        Path.GetFileName(saveResult.ImagePath);
+                }
+
+                Debug.WriteLine("Drawing image = " + saveResult.ImagePath);
+                Debug.WriteLine("Drawing data = " + saveResult.JsonPath);
+            }
+            catch (Exception ex)
+            {
+                lastDrawingScore = null;
+                drawingStatusText = "軌跡儲存或比對失敗，請查看 Debug 輸出";
+                Debug.WriteLine("Air Draw error: " + ex);
+            }
+
+            drawingFinishedAt = DateTime.Now;
+            gameState = GameState.Finished;
         }
 
         private void AddDrawingPoint(PointF pt)
@@ -319,19 +456,97 @@ namespace CSharp_YoloOnnx
             if (gameState != GameState.Drawing)
                 return;
 
-            drawingPoints.Add(pt);
+            PointF filteredPoint = pt;
+
+            if (drawingPoints.Count > 0)
+            {
+                PointF previous = drawingPoints[drawingPoints.Count - 1];
+
+                filteredPoint = new PointF(
+                    previous.X + (pt.X - previous.X) * PointSmoothingFactor,
+                    previous.Y + (pt.Y - previous.Y) * PointSmoothingFactor);
+
+                float dx = filteredPoint.X - previous.X;
+                float dy = filteredPoint.Y - previous.Y;
+
+                if (dx * dx + dy * dy < MinimumPointDistance * MinimumPointDistance)
+                    return;
+            }
+
+            drawingPoints.Add(filteredPoint);
+            drawingPointTimes.Add(DateTime.Now);
+            handTrail.Add(filteredPoint);
+        }
+
+        private void TrimStopGestureTail()
+        {
+            if (drawingPoints.Count == 0 ||
+                drawingPointTimes.Count != drawingPoints.Count)
+                return;
+
+            DateTime chestDetectedAt =
+                handOnChestStart == DateTime.MinValue
+                    ? DateTime.Now
+                    : handOnChestStart;
+
+            DateTime cutoff = chestDetectedAt.AddMilliseconds(-StopGestureTailTrimMs);
+            int keepCount = drawingPointTimes.Count;
+
+            while (keepCount > 0 && drawingPointTimes[keepCount - 1] >= cutoff)
+                keepCount--;
+
+            if (keepCount >= drawingPoints.Count)
+                return;
+
+            int removeCount = drawingPoints.Count - keepCount;
+            drawingPoints.RemoveRange(keepCount, removeCount);
+            drawingPointTimes.RemoveRange(keepCount, removeCount);
+
+            if (handTrail.Count >= keepCount + removeCount)
+                handTrail.RemoveRange(keepCount, removeCount);
         }
 
         private void UpdateGame(Detection main)
         {
-            if (main == null)
+            if (gameState == GameState.Finished)
+            {
+                if (drawingFinishedAt != DateTime.MinValue &&
+                    (DateTime.Now - drawingFinishedAt).TotalMilliseconds >= FinishedDisplayMs)
+                {
+                    gameState = GameState.Idle;
+                    handTrail.Clear();
+                    drawingPoints.Clear();
+                    drawingPointTimes.Clear();
+                    drawingStatusText =
+                        string.IsNullOrWhiteSpace(templateImagePath)
+                            ? "舉起右手並停留 0.8 秒開始畫圖"
+                            : "比對圖：" +
+                              Path.GetFileName(templateImagePath) +
+                              "｜舉起右手開始";
+                }
+
+                return;
+            }
+
+            if (gameState == GameState.Scoring)
                 return;
 
+            if (main == null || main.Keypoints.Count <= 10 || _ratio <= 0f)
+            {
+                handRaisedStart = DateTime.MinValue;
+                handOnChestStart = DateTime.MinValue;
+                return;
+            }
+
+            bool rawHandRaised = IsRightHandRaised(main);
+            bool rawHandOnChest = IsRightHandOnChest(main);
+
             bool handRaised =
-                IsRaiseHandConfirmed(IsRightHandRaised(main));
+                IsRaiseHandConfirmed(rawHandRaised);
 
             bool handOnChest =
-                IsHandOnChestConfirmed(IsRightHandOnChest(main));
+                gameState == GameState.Drawing &&
+                IsHandOnChestConfirmed(rawHandOnChest);
 
             var wrist = main.Keypoints[10];
 
@@ -356,8 +571,8 @@ namespace CSharp_YoloOnnx
 
                 case GameState.Drawing:
 
-                    handTrail.Add(pt);
-                    AddDrawingPoint(pt);
+                    if (!rawHandOnChest)
+                        AddDrawingPoint(pt);
 
                     //if (handTrail.Count > 20)
                     //    handTrail.RemoveAt(0);
@@ -382,10 +597,6 @@ namespace CSharp_YoloOnnx
                     break;
 
                 case GameState.Finished:
-
-                    // 之後做 AI 評分
-                    gameState = GameState.Idle;
-
                     break;
 
                 case GameState.Countdown:
@@ -480,9 +691,12 @@ namespace CSharp_YoloOnnx
                 // 軌跡（畫在最上層前）
                 if (handTrail.Count > 1)
                 {
-                    for (int i = 1; i < handTrail.Count; i++)
+                    using (Pen trailPen = new Pen(Color.Yellow, 4f))
                     {
-                        g.DrawLine(new Pen(Color.Yellow, 2) { StartCap = LineCap.Round, EndCap = LineCap.Round }, handTrail[i - 1], handTrail[i]);
+                        trailPen.StartCap = LineCap.Round;
+                        trailPen.EndCap = LineCap.Round;
+                        trailPen.LineJoin = LineJoin.Round;
+                        g.DrawLines(trailPen, handTrail.ToArray());
                     }
                 }
 
@@ -607,9 +821,55 @@ namespace CSharp_YoloOnnx
                     g.FillRectangle(new SolidBrush(Color.FromArgb(120, 0, 0, 0)), 5, 5, 260, 60);
                     g.DrawString(" HELLO!", new Font("Arial", 32, FontStyle.Bold), Brushes.Yellow, new PointF(10, 100));
                 }
+
+                DrawAirDrawStatus(g, copy.Width);
             }
 
             return copy;
+        }
+
+        private void DrawAirDrawStatus(Graphics graphics, int imageWidth)
+        {
+            string stateText;
+            Color stateColor;
+
+            switch (gameState)
+            {
+                case GameState.Drawing:
+                    stateText = "DRAWING";
+                    stateColor = Color.Lime;
+                    break;
+
+                case GameState.Scoring:
+                    stateText = "SCORING";
+                    stateColor = Color.Orange;
+                    break;
+
+                case GameState.Finished:
+                    stateText = "FINISHED";
+                    stateColor = lastDrawingScore.HasValue ? Color.Cyan : Color.Yellow;
+                    break;
+
+                default:
+                    stateText = "READY";
+                    stateColor = Color.White;
+                    break;
+            }
+
+            string message = stateText + "｜" + drawingStatusText;
+
+            using (Font font = new Font("Microsoft JhengHei UI", 14f, FontStyle.Bold))
+            {
+                SizeF textSize = graphics.MeasureString(message, font);
+                float width = Math.Min(imageWidth - 20f, textSize.Width + 24f);
+
+                using (Brush background = new SolidBrush(Color.FromArgb(170, 0, 0, 0)))
+                using (Brush foreground = new SolidBrush(stateColor))
+                {
+                    graphics.FillRectangle(background, 10f, 10f, width, textSize.Height + 16f);
+                    graphics.DrawString(message, font, foreground, 20f, 18f);
+                }
+            }
         }
 
         private List<Detection> PostProcess(Tensor<float> output)
@@ -678,7 +938,7 @@ namespace CSharp_YoloOnnx
 
         private bool IsRightHandRaised(Detection person)
         {
-            if (person == null)
+            if (person == null || person.Keypoints.Count <= 10)
                 return false;
 
             var wrist = person.Keypoints[10];
@@ -695,7 +955,7 @@ namespace CSharp_YoloOnnx
 
         private bool IsRightHandOnChest(Detection person)
         {
-            if (person == null)
+            if (person == null || person.Keypoints.Count <= 10)
                 return false;
 
             var wrist = person.Keypoints[10];
@@ -714,18 +974,35 @@ namespace CSharp_YoloOnnx
             float wristX = (wrist.X - _padX) / _ratio;
             float wristY = (wrist.Y - _padY) / _ratio;
 
-            float chestX =
-                ((leftShoulder.X + rightShoulder.X) / 2 - _padX) / _ratio;
+            float leftShoulderX = (leftShoulder.X - _padX) / _ratio;
+            float leftShoulderY = (leftShoulder.Y - _padY) / _ratio;
+            float rightShoulderX = (rightShoulder.X - _padX) / _ratio;
+            float rightShoulderY = (rightShoulder.Y - _padY) / _ratio;
 
-            float chestY =
-                ((leftShoulder.Y + rightShoulder.Y) / 2 - _padY) / _ratio;
+            float shoulderMidX = (leftShoulderX + rightShoulderX) / 2f;
+            float shoulderMidY = (leftShoulderY + rightShoulderY) / 2f;
+            float shoulderDx = rightShoulderX - leftShoulderX;
+            float shoulderDy = rightShoulderY - leftShoulderY;
+            float shoulderWidth = (float)Math.Sqrt(
+                shoulderDx * shoulderDx + shoulderDy * shoulderDy);
+
+            if (shoulderWidth < 20f)
+                return false;
+
+            // 胸前位置會隨人物在畫面中的大小調整，避免固定像素門檻造成遠近差異。
+            float chestX = shoulderMidX;
+            float chestY = shoulderMidY + shoulderWidth * 0.45f;
+            float radiusX = Math.Max(35f, shoulderWidth * 0.65f);
+            float radiusY = Math.Max(35f, shoulderWidth * 0.55f);
 
             double dx = wristX - chestX;
             double dy = wristY - chestY;
 
-            double distance = Math.Sqrt(dx * dx + dy * dy);
+            double normalizedDistance =
+                dx * dx / (radiusX * radiusX) +
+                dy * dy / (radiusY * radiusY);
 
-            return distance < 70;
+            return normalizedDistance <= 1d;
         }
 
         private bool IsDrawingFinished(Detection person)
