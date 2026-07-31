@@ -1,0 +1,70 @@
+{
+  "format": 1,
+  "restore": {
+    "D:\\Users\\Andy\\Documents\\Visual Studio 2017\\Projects\\CSharp_YoloOnnx\\CSharp_YoloOnnx\\CSharp_YoloOnnx.csproj": {}
+  },
+  "projects": {
+    "D:\\Users\\Andy\\Documents\\Visual Studio 2017\\Projects\\CSharp_YoloOnnx\\CSharp_YoloOnnx\\CSharp_YoloOnnx.csproj": {
+      "version": "1.0.0",
+      "restore": {
+        "projectUniqueName": "D:\\Users\\Andy\\Documents\\Visual Studio 2017\\Projects\\CSharp_YoloOnnx\\CSharp_YoloOnnx\\CSharp_YoloOnnx.csproj",
+        "projectName": "CSharp_YoloOnnx",
+        "projectPath": "D:\\Users\\Andy\\Documents\\Visual Studio 2017\\Projects\\CSharp_YoloOnnx\\CSharp_YoloOnnx\\CSharp_YoloOnnx.csproj",
+        "packagesPath": "C:\\Users\\Apostar\\.nuget\\packages\\",
+        "outputPath": "D:\\Users\\Andy\\Documents\\Visual Studio 2017\\Projects\\CSharp_YoloOnnx\\CSharp_YoloOnnx\\obj\\",
+        "projectStyle": "PackageReference",
+        "skipContentFileWrite": true,
+        "UsingMicrosoftNETSdk": false,
+        "fallbackFolders": [
+          "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"
+        ],
+        "configFilePaths": [
+          "C:\\Users\\Apostar\\AppData\\Roaming\\NuGet\\NuGet.Config",
+          "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.FallbackLocation.config",
+          "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.Offline.config"
+        ],
+        "originalTargetFrameworks": [
+          "net472"
+        ],
+        "sources": {
+          "C:\\Program Files (x86)\\Microsoft SDKs\\NuGetPackages\\": {},
+          "https://api.nuget.org/v3/index.json": {}
+        },
+        "frameworks": {
+          "net472": {
+            "projectReferences": {}
+          }
+        },
+        "restoreAuditProperties": {
+          "enableAudit": "true",
+          "auditLevel": "low",
+          "auditMode": "direct"
+        }
+      },
+      "frameworks": {
+        "net472": {
+          "dependencies": {
+            "Microsoft.ML.OnnxRuntime": {
+              "target": "Package",
+              "version": "[1.27.0, )"
+            }
+          }
+        }
+      },
+      "runtimes": {
+        "win": {
+          "#import": []
+        },
+        "win-arm64": {
+          "#import": []
+        },
+        "win-x64": {
+          "#import": []
+        },
+        "win-x86": {
+          "#import": []
+        }
+      }
+    }
+  }
+}
