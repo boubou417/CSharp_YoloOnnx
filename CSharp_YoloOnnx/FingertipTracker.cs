@@ -12,6 +12,7 @@ namespace CSharp_YoloOnnx
     {
         public PointF IndexTip { get; set; }
         public PointF ThumbTip { get; set; }
+        public PointF Wrist { get; set; }
         public float PinchRatio { get; set; }
         public float OpenPalmScore { get; set; }
         public float HandPresence { get; set; }
@@ -42,7 +43,7 @@ namespace CSharp_YoloOnnx
         private const int PinkyTipLandmarkIndex = 20;
         private const float MinimumHandPresence = 0.35f;
         private const float ExtendedFingerDistanceRatio = 1.12f;
-        private const float CropSizeFromForearm = 1.8f;
+        private const float CropSizeFromForearm = 2.2f;
         private const float CropCenterFromWrist = 0.35f;
         private const float MaximumWristMismatchRatio = 0.35f;
 
@@ -226,6 +227,7 @@ namespace CSharp_YoloOnnx
                 {
                     IndexTip = indexTip,
                     ThumbTip = thumbTip,
+                    Wrist = detectedWrist,
                     PinchRatio = pinchRatio,
                     OpenPalmScore = openPalmScore,
                     HandPresence = handPresence,

@@ -46,6 +46,7 @@ namespace CSharp_YoloOnnx
         const int IdleHandInferenceIntervalMs = 120;
         const int OpenPalmStartDelayMs = 600;
         const int StartGestureMissingGraceMs = 300;
+        const int HandTrackingFallbackMs = 300;
         const int PinchFinishDelayMs = 600;
         const int PinchTailTrimMs = 250;
         const float MinimumPointDistance = 2f;
@@ -84,6 +85,10 @@ namespace CSharp_YoloOnnx
         bool waitingForOpenPalmReleaseAfterStart;
         DrawingHand activeDrawingHand = DrawingHand.None;
         DrawingHand displayedDrawingHand = DrawingHand.None;
+        HandTrackingAnchor leftHandTracking =
+            new HandTrackingAnchor();
+        HandTrackingAnchor rightHandTracking =
+            new HandTrackingAnchor();
         Bitmap pendingDisplayImage;
         int displayUpdateScheduled;
 
@@ -133,6 +138,20 @@ namespace CSharp_YoloOnnx
             None,
             Left,
             Right
+        }
+
+        private sealed class HandTrackingAnchor
+        {
+            public PointF Wrist;
+            public PointF Elbow;
+            public DateTime UpdatedAt = DateTime.MinValue;
+
+            public bool IsRecent(DateTime now)
+            {
+                return UpdatedAt != DateTime.MinValue &&
+                    (now - UpdatedAt).TotalMilliseconds <=
+                        HandTrackingFallbackMs;
+            }
         }
 
         public Form1()
@@ -1105,23 +1124,63 @@ namespace CSharp_YoloOnnx
                 person.Keypoints[elbowIndex];
             Keypoint wristKeypoint =
                 person.Keypoints[wristIndex];
+            bool elbowReliable =
+                elbowKeypoint.Score >= MinimumPoseHandKeypointScore;
+            bool wristReliable =
+                wristKeypoint.Score >= MinimumPoseHandKeypointScore;
+            DateTime now = DateTime.Now;
+            HandTrackingAnchor anchor =
+                GetHandTrackingAnchor(hand);
+            bool canUseTrackingFallback =
+                gameState == GameState.Drawing &&
+                hand == activeDrawingHand &&
+                anchor.IsRecent(now);
+            PointF elbow;
+            PointF wrist;
 
-            if (elbowKeypoint.Score < MinimumPoseHandKeypointScore ||
-                wristKeypoint.Score < MinimumPoseHandKeypointScore)
+            if (elbowReliable && wristReliable)
+            {
+                elbow = KeypointToImagePoint(elbowKeypoint);
+                wrist = KeypointToImagePoint(wristKeypoint);
+            }
+            else if (canUseTrackingFallback && wristReliable)
+            {
+                wrist = KeypointToImagePoint(wristKeypoint);
+                elbow = new PointF(
+                    wrist.X + anchor.Elbow.X - anchor.Wrist.X,
+                    wrist.Y + anchor.Elbow.Y - anchor.Wrist.Y);
+            }
+            else if (canUseTrackingFallback)
+            {
+                wrist = anchor.Wrist;
+                elbow = anchor.Elbow;
+            }
+            else
             {
                 return false;
             }
 
-            PointF elbow = KeypointToImagePoint(elbowKeypoint);
-            PointF wrist = KeypointToImagePoint(wristKeypoint);
-
             try
             {
-                return fingertipTracker.TryDetect(
+                bool detected = fingertipTracker.TryDetect(
                     frame,
                     wrist,
                     elbow,
                     out result);
+
+                if (!detected)
+                    return false;
+
+                PointF forearmOffset = new PointF(
+                    elbow.X - wrist.X,
+                    elbow.Y - wrist.Y);
+                anchor.Wrist = result.Wrist;
+                anchor.Elbow = new PointF(
+                    result.Wrist.X + forearmOffset.X,
+                    result.Wrist.Y + forearmOffset.Y);
+                anchor.UpdatedAt = now;
+
+                return true;
             }
             catch (Exception ex)
             {
@@ -1132,6 +1191,14 @@ namespace CSharp_YoloOnnx
                     ex);
                 return false;
             }
+        }
+
+        private HandTrackingAnchor GetHandTrackingAnchor(
+            DrawingHand hand)
+        {
+            return hand == DrawingHand.Left
+                ? leftHandTracking
+                : rightHandTracking;
         }
 
         private bool TryGetFingertipPoint(
