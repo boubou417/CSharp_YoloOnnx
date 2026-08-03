@@ -95,6 +95,21 @@ namespace CSharp_YoloOnnx
             PointF elbow,
             out FingertipResult result)
         {
+            return TryDetect(
+                frame,
+                wrist,
+                elbow,
+                MinimumHandPresence,
+                out result);
+        }
+
+        public bool TryDetect(
+            Bitmap frame,
+            PointF wrist,
+            PointF elbow,
+            float minimumHandPresence,
+            out FingertipResult result)
+        {
             result = null;
 
             if (frame == null)
@@ -119,7 +134,7 @@ namespace CSharp_YoloOnnx
                 float handPresence;
 
                 if (!TryReadOutputs(out landmarks, out handPresence) ||
-                    handPresence < MinimumHandPresence)
+                    handPresence < minimumHandPresence)
                 {
                     return false;
                 }

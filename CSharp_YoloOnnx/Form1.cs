@@ -48,6 +48,7 @@ namespace CSharp_YoloOnnx
         const int OpenPalmStartDelayMs = 600;
         const int StartGestureMissingGraceMs = 300;
         const int HandTrackingFallbackMs = 300;
+        const int PinchPreconfirmMs = 180;
         const int PinchFinishDelayMs = 600;
         const int PinchTailTrimMs = 250;
         const float MinimumPointDistance = 2f;
@@ -58,6 +59,8 @@ namespace CSharp_YoloOnnx
         const float OpenPalmStartScore = 0.75f;
         const float OpenPalmReleaseScore = 0.50f;
         const float MinimumPoseHandKeypointScore = 0.35f;
+        const float MinimumIdleHandPresence = 0.35f;
+        const float MinimumDrawingHandPresence = 0.45f;
 
         DateTime drawingFinishedAt = DateTime.MinValue;
         DateTime fingertipMissingSince = DateTime.MinValue;
@@ -68,6 +71,7 @@ namespace CSharp_YoloOnnx
         DateTime rightStartGestureAt = DateTime.MinValue;
         DateTime leftStartGestureLastSeenAt = DateTime.MinValue;
         DateTime rightStartGestureLastSeenAt = DateTime.MinValue;
+        DateTime pinchCandidateStartedAt = DateTime.MinValue;
         DateTime pinchStartedAt = DateTime.MinValue;
         string drawingStatusText =
             "左右手皆可｜張開手掌 0.6 秒開始";
@@ -928,7 +932,7 @@ namespace CSharp_YoloOnnx
                                 PinchTailTrimMs);
                             break;
                         }
-                        else if (pinchInProgress)
+                        else if (IsPinchDetectionActive())
                         {
                             int progress =
                                 GetPinchProgressPercent(
@@ -1292,10 +1296,16 @@ namespace CSharp_YoloOnnx
 
             try
             {
+                float minimumHandPresence =
+                    gameState == GameState.Drawing &&
+                    hand == activeDrawingHand
+                        ? MinimumDrawingHandPresence
+                        : MinimumIdleHandPresence;
                 bool detected = fingertipTracker.TryDetect(
                     frame,
                     wrist,
                     elbow,
+                    minimumHandPresence,
                     out result);
 
                 if (!detected)
@@ -1379,6 +1389,44 @@ namespace CSharp_YoloOnnx
             }
 
             PointF detected = result.IndexTip;
+            PointF? previousThumb = displayedThumbPoint;
+
+            if (!waitingForOpenPalmReleaseAfterStart &&
+                lastFingertipPoint.HasValue &&
+                previousThumb.HasValue &&
+                result.PinchRatio <= PinchStartRatio &&
+                (IsPinchDetectionActive() ||
+                 latestPinchRatio >= PinchReleaseRatio))
+            {
+                PointF previousIndex =
+                    lastFingertipPoint.Value;
+                float indexDx = detected.X - previousIndex.X;
+                float indexDy = detected.Y - previousIndex.Y;
+                float thumbDx =
+                    result.ThumbTip.X - previousThumb.Value.X;
+                float thumbDy =
+                    result.ThumbTip.Y - previousThumb.Value.Y;
+                float indexMovementSquared =
+                    indexDx * indexDx + indexDy * indexDy;
+                float thumbMovementSquared =
+                    thumbDx * thumbDx + thumbDy * thumbDy;
+                float suspiciousMovement = Math.Max(
+                    18f,
+                    GetMaximumFingertipJump(person) * 0.25f);
+
+                if (indexMovementSquared >=
+                        suspiciousMovement * suspiciousMovement &&
+                    thumbMovementSquared * 2.25f <
+                        indexMovementSquared)
+                {
+                    SetDisplayedHandResult(hand, result);
+                    displayedFingertipPoint = previousIndex;
+                    lastFingertipSeenAt = now;
+                    fingertipMissingSince = DateTime.MinValue;
+                    fingertip = previousIndex;
+                    return true;
+                }
+            }
 
             if (lastFingertipPoint.HasValue &&
                 lastFingertipSeenAt != DateTime.MinValue &&
@@ -1414,11 +1462,31 @@ namespace CSharp_YoloOnnx
         {
             if (!pinchInProgress)
             {
-                if (latestPinchRatio > PinchStartRatio)
+                if (pinchCandidateStartedAt == DateTime.MinValue)
+                {
+                    if (latestPinchRatio > PinchStartRatio)
+                        return false;
+
+                    pinchCandidateStartedAt = now;
+                    drawingStrokeStartPending = true;
                     return false;
+                }
+
+                if (latestPinchRatio >= PinchReleaseRatio)
+                {
+                    ResetPinchGesture(true);
+                    return false;
+                }
+
+                if ((now - pinchCandidateStartedAt)
+                        .TotalMilliseconds < PinchPreconfirmMs)
+                {
+                    return false;
+                }
 
                 pinchInProgress = true;
-                pinchStartedAt = now;
+                pinchStartedAt = pinchCandidateStartedAt;
+                pinchCandidateStartedAt = DateTime.MinValue;
                 drawingStrokeStartPending = true;
             }
             else if (latestPinchRatio >= PinchReleaseRatio)
@@ -1434,14 +1502,16 @@ namespace CSharp_YoloOnnx
 
         private int GetPinchProgressPercent(DateTime now)
         {
-            if (!pinchInProgress ||
-                pinchStartedAt == DateTime.MinValue)
-            {
+            DateTime progressStartedAt =
+                pinchInProgress
+                    ? pinchStartedAt
+                    : pinchCandidateStartedAt;
+
+            if (progressStartedAt == DateTime.MinValue)
                 return 0;
-            }
 
             double progress =
-                (now - pinchStartedAt).TotalMilliseconds /
+                (now - progressStartedAt).TotalMilliseconds /
                 PinchFinishDelayMs;
 
             return (int)Math.Max(
@@ -1451,9 +1521,10 @@ namespace CSharp_YoloOnnx
 
         private void ResetPinchGesture(bool startNewStroke)
         {
-            bool wasPinching = pinchInProgress;
+            bool wasPinching = IsPinchDetectionActive();
 
             pinchInProgress = false;
+            pinchCandidateStartedAt = DateTime.MinValue;
             pinchStartedAt = DateTime.MinValue;
             latestPinchRatio = float.MaxValue;
 
@@ -1462,6 +1533,12 @@ namespace CSharp_YoloOnnx
                 drawingStrokeStartPending = true;
                 lastFingertipPoint = null;
             }
+        }
+
+        private bool IsPinchDetectionActive()
+        {
+            return pinchInProgress ||
+                pinchCandidateStartedAt != DateTime.MinValue;
         }
 
         private PointF KeypointToImagePoint(Keypoint keypoint)
@@ -2127,7 +2204,7 @@ namespace CSharp_YoloOnnx
                     return true;
                 }
 
-                if (pinchInProgress)
+                if (IsPinchDetectionActive())
                 {
                     progress =
                         GetPinchProgressPercent(now) /
