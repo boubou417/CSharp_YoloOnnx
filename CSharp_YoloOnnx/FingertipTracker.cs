@@ -110,6 +110,23 @@ namespace CSharp_YoloOnnx
             float minimumHandPresence,
             out FingertipResult result)
         {
+            return TryDetect(
+                frame,
+                wrist,
+                elbow,
+                minimumHandPresence,
+                1f,
+                out result);
+        }
+
+        public bool TryDetect(
+            Bitmap frame,
+            PointF wrist,
+            PointF elbow,
+            float minimumHandPresence,
+            float cropScale,
+            out FingertipResult result)
+        {
             result = null;
 
             if (frame == null)
@@ -121,8 +138,15 @@ namespace CSharp_YoloOnnx
                     return false;
 
                 CropTransform transform;
-                if (!TryCreateCropTransform(frame.Size, wrist, elbow, out transform))
+                if (!TryCreateCropTransform(
+                    frame.Size,
+                    wrist,
+                    elbow,
+                    cropScale,
+                    out transform))
+                {
                     return false;
+                }
 
                 FillInputTensor(frame, transform);
                 Marshal.Copy(inputBuffer, 0, inputTensor.DataPointer, inputBuffer.Length);
@@ -289,6 +313,7 @@ namespace CSharp_YoloOnnx
             Size frameSize,
             PointF wrist,
             PointF elbow,
+            float cropScale,
             out CropTransform transform)
         {
             transform = null;
@@ -314,9 +339,16 @@ namespace CSharp_YoloOnnx
                 Math.Min(frameSize.Width, frameSize.Height) * 0.055f);
             float maximumSide =
                 Math.Min(frameSize.Width, frameSize.Height) * 0.70f;
+            float safeCropScale = Math.Max(
+                1f,
+                Math.Min(1.5f, cropScale));
             float sideLength = Math.Max(
                 minimumSide,
-                Math.Min(maximumSide, forearmLength * CropSizeFromForearm));
+                Math.Min(
+                    maximumSide,
+                    forearmLength *
+                    CropSizeFromForearm *
+                    safeCropScale));
 
             PointF center = new PointF(
                 wrist.X + forwardX * forearmLength * CropCenterFromWrist,
