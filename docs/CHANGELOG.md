@@ -1,5 +1,15 @@
 # 版本紀錄
 
+## V1.3 Performance Test
+
+- Split camera acquisition/display and YOLO pose inference into independent background threads.
+- Keep only the newest pending AI frame so slow inference cannot build a delayed frame backlog.
+- Display live camera frames immediately while reusing the latest completed person boxes and skeleton.
+- Keep the fixed 640 x 640 ONNX model input.
+- Add live pose inference time (ms) to the on-screen diagnostics.
+- Preserve the V1.2 drawing, fingertip, scoring, and magic-animation behavior.
+
+
 此檔案記錄 CSharp_YoloOnnx 的重要版本變更。
 
 ## [V1.2] - 2026-08-03
