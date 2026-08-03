@@ -1838,6 +1838,7 @@ namespace CSharp_YoloOnnx
 
                 DrawFingertipMarker(g);
                 DrawMagicAnimation(g, copy.Width, copy.Height);
+                DrawSimilarityResult(g, copy.Width, copy.Height);
                 DrawAirDrawStatus(g, copy.Width);
                 DrawLiveDiagnostics(g, boxes.Count);
             }
@@ -2182,6 +2183,88 @@ namespace CSharp_YoloOnnx
                     graphics.FillRectangle(background, 10f, 10f, width, textSize.Height + 16f);
                     graphics.DrawString(message, font, foreground, 20f, 18f);
                 }
+            }
+        }
+
+        private void DrawSimilarityResult(
+            Graphics graphics,
+            int imageWidth,
+            int imageHeight)
+        {
+            if (gameState != GameState.Finished ||
+                !lastDrawingScore.HasValue)
+            {
+                return;
+            }
+
+            double score = lastDrawingScore.Value;
+            Color scoreColor =
+                score >= 75d
+                    ? Color.Lime
+                    : score >= 55d
+                        ? Color.Gold
+                        : Color.OrangeRed;
+            string title = "五角星相似度";
+            string scoreText = score.ToString("0.0") + " 分";
+            float panelWidth = Math.Max(
+                80f,
+                Math.Min(420f, imageWidth - 40f));
+            float panelHeight = 112f;
+            float left = (imageWidth - panelWidth) / 2f;
+            float top = Math.Max(
+                70f,
+                imageHeight - panelHeight - 36f);
+
+            using (Brush background = new SolidBrush(
+                Color.FromArgb(205, 0, 0, 0)))
+            using (Brush scoreBrush = new SolidBrush(scoreColor))
+            using (Pen border = new Pen(scoreColor, 3f))
+            using (Font titleFont = new Font(
+                "Microsoft JhengHei UI",
+                16f,
+                FontStyle.Bold))
+            using (Font scoreFont = new Font(
+                "Microsoft JhengHei UI",
+                32f,
+                FontStyle.Bold))
+            using (StringFormat centered = new StringFormat
+            {
+                Alignment = StringAlignment.Center,
+                LineAlignment = StringAlignment.Center
+            })
+            {
+                RectangleF panel = new RectangleF(
+                    left,
+                    top,
+                    panelWidth,
+                    panelHeight);
+                graphics.FillRectangle(background, panel);
+                graphics.DrawRectangle(
+                    border,
+                    panel.X,
+                    panel.Y,
+                    panel.Width,
+                    panel.Height);
+                graphics.DrawString(
+                    title,
+                    titleFont,
+                    Brushes.White,
+                    new RectangleF(
+                        left,
+                        top + 7f,
+                        panelWidth,
+                        32f),
+                    centered);
+                graphics.DrawString(
+                    scoreText,
+                    scoreFont,
+                    scoreBrush,
+                    new RectangleF(
+                        left,
+                        top + 36f,
+                        panelWidth,
+                        66f),
+                    centered);
             }
         }
 
