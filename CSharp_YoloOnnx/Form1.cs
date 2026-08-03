@@ -78,6 +78,7 @@ namespace CSharp_YoloOnnx
         string templateImagePath = string.Empty;
         double? lastDrawingScore;
         Button btnSelectTemplate;
+        Label lblSimilarityScore;
         Label lblAirDrawStatus;
         FingertipTracker fingertipTracker;
         PointF? lastFingertipPoint;
@@ -206,7 +207,7 @@ namespace CSharp_YoloOnnx
             panelToolBar.Dock = DockStyle.Top;
             panelToolBar.Height = 40;
             panelStatusBar.Dock = DockStyle.Bottom;
-            panelStatusBar.Height = 20;
+            panelStatusBar.Height = 54;
             panelImage.Dock = DockStyle.Fill;
             pBox.Dock = DockStyle.Fill;
             pBox.SizeMode = PictureBoxSizeMode.Zoom;
@@ -493,18 +494,35 @@ namespace CSharp_YoloOnnx
             btnSelectTemplate.Click += btnSelectTemplate_Click;
             panelToolBar.Controls.Add(btnSelectTemplate);
 
+            lblSimilarityScore = new Label
+            {
+                Dock = DockStyle.Left,
+                Width = 300,
+                TextAlign = ContentAlignment.MiddleCenter,
+                BorderStyle = BorderStyle.FixedSingle,
+                Font = new Font(
+                    "Microsoft JhengHei UI",
+                    16f,
+                    FontStyle.Bold),
+                ForeColor = Color.DimGray,
+                BackColor = Color.White,
+                Text = "形狀相似度：--"
+            };
+
             lblAirDrawStatus = new Label
             {
                 Dock = DockStyle.Fill,
                 AutoEllipsis = true,
                 TextAlign = ContentAlignment.MiddleLeft,
-                Padding = new Padding(6, 0, 6, 0),
+                Padding = new Padding(12, 0, 6, 0),
                 ForeColor = Color.Black,
                 BackColor = SystemColors.Control,
                 Text = drawingStatusText
             };
+
             panelStatusBar.Controls.Add(lblAirDrawStatus);
-            lblAirDrawStatus.BringToFront();
+            panelStatusBar.Controls.Add(lblSimilarityScore);
+            lblSimilarityScore.BringToFront();
         }
 
         private void TryLoadDefaultTemplate()
@@ -2284,7 +2302,6 @@ namespace CSharp_YoloOnnx
 
                 DrawFingertipMarker(g);
                 DrawMagicAnimation(g, copy.Width, copy.Height);
-                DrawSimilarityResult(g, copy.Width, copy.Height);
             }
         }
 
@@ -2587,88 +2604,34 @@ namespace CSharp_YoloOnnx
                 stateText +
                 "｜" +
                 drawingStatusText;
-        }
 
-        private void DrawSimilarityResult(
-            Graphics graphics,
-            int imageWidth,
-            int imageHeight)
-        {
-            if (gameState != GameState.Finished ||
-                !lastDrawingScore.HasValue)
+            if (lblSimilarityScore == null ||
+                lblSimilarityScore.IsDisposed)
             {
                 return;
             }
 
-            double score = lastDrawingScore.Value;
-            Color scoreColor =
-                score >= 75d
-                    ? Color.Lime
-                    : score >= 55d
-                        ? Color.Gold
-                        : Color.OrangeRed;
-            string title = "形狀相似度";
-            string scoreText = score.ToString("0.0") + " 分";
-            float panelWidth = Math.Max(
-                80f,
-                Math.Min(420f, imageWidth - 40f));
-            float panelHeight = 112f;
-            float left = (imageWidth - panelWidth) / 2f;
-            float top = Math.Max(
-                70f,
-                imageHeight - panelHeight - 36f);
-
-            using (Brush background = new SolidBrush(
-                Color.FromArgb(205, 0, 0, 0)))
-            using (Brush scoreBrush = new SolidBrush(scoreColor))
-            using (Pen border = new Pen(scoreColor, 3f))
-            using (Font titleFont = new Font(
-                "Microsoft JhengHei UI",
-                16f,
-                FontStyle.Bold))
-            using (Font scoreFont = new Font(
-                "Microsoft JhengHei UI",
-                32f,
-                FontStyle.Bold))
-            using (StringFormat centered = new StringFormat
+            if (!lastDrawingScore.HasValue)
             {
-                Alignment = StringAlignment.Center,
-                LineAlignment = StringAlignment.Center
-            })
-            {
-                RectangleF panel = new RectangleF(
-                    left,
-                    top,
-                    panelWidth,
-                    panelHeight);
-                graphics.FillRectangle(background, panel);
-                graphics.DrawRectangle(
-                    border,
-                    panel.X,
-                    panel.Y,
-                    panel.Width,
-                    panel.Height);
-                graphics.DrawString(
-                    title,
-                    titleFont,
-                    Brushes.White,
-                    new RectangleF(
-                        left,
-                        top + 7f,
-                        panelWidth,
-                        32f),
-                    centered);
-                graphics.DrawString(
-                    scoreText,
-                    scoreFont,
-                    scoreBrush,
-                    new RectangleF(
-                        left,
-                        top + 36f,
-                        panelWidth,
-                        66f),
-                    centered);
+                lblSimilarityScore.Text =
+                    "形狀相似度：--";
+                lblSimilarityScore.ForeColor =
+                    Color.DimGray;
+                return;
             }
+
+            double score =
+                lastDrawingScore.Value;
+            lblSimilarityScore.Text =
+                "形狀相似度：" +
+                score.ToString("0.0") +
+                " 分";
+            lblSimilarityScore.ForeColor =
+                score >= 75d
+                    ? Color.Green
+                    : score >= 55d
+                        ? Color.DarkOrange
+                        : Color.Firebrick;
         }
 
         private List<Detection> PostProcess(Tensor<float> output)
