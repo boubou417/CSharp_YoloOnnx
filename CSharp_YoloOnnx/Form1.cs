@@ -51,6 +51,8 @@ namespace CSharp_YoloOnnx
         const int StartGestureMissingGraceMs = 300;
         const int HandTrackingFallbackMs = 300;
         const int PinchPreconfirmMs = 180;
+        const int PinchReleaseConfirmMs = 200;
+        const int PinchMissingGraceMs = 300;
         const int PinchFinishDelayMs = 600;
         const int PinchTailTrimMs = 250;
         const float MinimumPointDistance = 2f;
@@ -75,6 +77,8 @@ namespace CSharp_YoloOnnx
         DateTime rightStartGestureLastSeenAt = DateTime.MinValue;
         DateTime pinchCandidateStartedAt = DateTime.MinValue;
         DateTime pinchStartedAt = DateTime.MinValue;
+        DateTime pinchReleaseCandidateAt = DateTime.MinValue;
+        DateTime pinchMissingSince = DateTime.MinValue;
         string drawingStatusText =
             "左右手皆可｜張開手掌 0.6 秒開始";
         string templateImagePath = string.Empty;
@@ -1779,6 +1783,8 @@ namespace CSharp_YoloOnnx
             fingertip = PointF.Empty;
 
             if (frame == null ||
+                IsPinchDetectionActive() ||
+                latestPinchRatio <= PinchReleaseRatio ||
                 lastLandmarkSeenAt == DateTime.MinValue ||
                 (now - lastLandmarkSeenAt)
                     .TotalMilliseconds >
@@ -1812,6 +1818,8 @@ namespace CSharp_YoloOnnx
 
         private bool UpdatePinchGesture(DateTime now)
         {
+            pinchMissingSince = DateTime.MinValue;
+
             if (!pinchInProgress)
             {
                 if (pinchCandidateStartedAt == DateTime.MinValue)
@@ -1820,36 +1828,73 @@ namespace CSharp_YoloOnnx
                         return false;
 
                     pinchCandidateStartedAt = now;
+                    pinchReleaseCandidateAt =
+                        DateTime.MinValue;
+                    fingertipMotionTracker.Reset();
+                    fingertipTrackingMode = "PINCH";
                     drawingStrokeStartPending = true;
                     return false;
                 }
 
                 if (latestPinchRatio >= PinchReleaseRatio)
                 {
-                    ResetPinchGesture(true);
+                    if (IsPinchReleaseConfirmed(now))
+                        ResetPinchGesture(true);
+
                     return false;
                 }
 
+                pinchReleaseCandidateAt =
+                    DateTime.MinValue;
+
                 if ((now - pinchCandidateStartedAt)
-                        .TotalMilliseconds < PinchPreconfirmMs)
+                        .TotalMilliseconds <
+                    PinchPreconfirmMs)
                 {
                     return false;
                 }
 
                 pinchInProgress = true;
-                pinchStartedAt = pinchCandidateStartedAt;
-                pinchCandidateStartedAt = DateTime.MinValue;
+                pinchStartedAt =
+                    pinchCandidateStartedAt;
+                pinchCandidateStartedAt =
+                    DateTime.MinValue;
                 drawingStrokeStartPending = true;
             }
-            else if (latestPinchRatio >= PinchReleaseRatio)
+            else if (latestPinchRatio >=
+                PinchReleaseRatio)
             {
-                ResetPinchGesture(true);
+                if (IsPinchReleaseConfirmed(now))
+                    ResetPinchGesture(true);
+
+                return false;
+            }
+            else
+            {
+                pinchReleaseCandidateAt =
+                    DateTime.MinValue;
+            }
+
+            return
+                (now - pinchStartedAt)
+                    .TotalMilliseconds >=
+                PinchFinishDelayMs;
+        }
+
+        private bool IsPinchReleaseConfirmed(
+            DateTime now)
+        {
+            if (pinchReleaseCandidateAt ==
+                DateTime.MinValue)
+            {
+                pinchReleaseCandidateAt = now;
                 return false;
             }
 
             return
-                (now - pinchStartedAt).TotalMilliseconds >=
-                PinchFinishDelayMs;
+                (now - pinchReleaseCandidateAt)
+                    .TotalMilliseconds >=
+                PinchReleaseConfirmMs;
         }
 
         private int GetPinchProgressPercent(DateTime now)
@@ -1878,6 +1923,8 @@ namespace CSharp_YoloOnnx
             pinchInProgress = false;
             pinchCandidateStartedAt = DateTime.MinValue;
             pinchStartedAt = DateTime.MinValue;
+            pinchReleaseCandidateAt = DateTime.MinValue;
+            pinchMissingSince = DateTime.MinValue;
             latestPinchRatio = float.MaxValue;
 
             if (startNewStroke && wasPinching)
@@ -1923,8 +1970,26 @@ namespace CSharp_YoloOnnx
             if (gameState != GameState.Drawing)
                 return;
 
-            ResetPinchGesture(true);
             DateTime now = DateTime.Now;
+
+            if (IsPinchDetectionActive())
+            {
+                if (pinchMissingSince ==
+                    DateTime.MinValue)
+                {
+                    pinchMissingSince = now;
+                }
+                else if ((now - pinchMissingSince)
+                        .TotalMilliseconds >=
+                    PinchMissingGraceMs)
+                {
+                    ResetPinchGesture(true);
+                }
+            }
+            else
+            {
+                ResetPinchGesture(true);
+            }
 
             if (lastLandmarkSeenAt == DateTime.MinValue ||
                 (now - lastLandmarkSeenAt)
