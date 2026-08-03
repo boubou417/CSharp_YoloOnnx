@@ -356,8 +356,12 @@ namespace CSharp_YoloOnnx
     {
         private const int ComparisonCanvasSize = 256;
         private const int ComparisonPadding = 18;
-        private const int MatchTolerance = 6;
+        private const int MatchTolerance = 10;
         private const int BackgroundDifferenceThreshold = 35;
+        private static readonly float[] RotationCandidates =
+        {
+            -8f, -6f, -4f, -2f, 0f, 2f, 4f, 6f, 8f
+        };
 
         public static double Compare(string drawingImagePath, string templateImagePath)
         {
@@ -376,8 +380,42 @@ namespace CSharp_YoloOnnx
             if (drawingCount == 0 || templateCount == 0)
                 return 0d;
 
-            int matchedDrawing = CountMatchedPixels(drawingMask, templateMask, MatchTolerance);
-            int matchedTemplate = CountMatchedPixels(templateMask, drawingMask, MatchTolerance);
+            double bestScore = 0d;
+
+            for (int i = 0; i < RotationCandidates.Length; i++)
+            {
+                bool[,] rotatedDrawing = RotateMask(
+                    drawingMask,
+                    RotationCandidates[i]);
+                double score = CalculateMaskScore(
+                    rotatedDrawing,
+                    templateMask);
+
+                if (score > bestScore)
+                    bestScore = score;
+            }
+
+            return Math.Max(0d, Math.Min(100d, bestScore));
+        }
+
+        private static double CalculateMaskScore(
+            bool[,] drawingMask,
+            bool[,] templateMask)
+        {
+            int drawingCount = CountPixels(drawingMask);
+            int templateCount = CountPixels(templateMask);
+
+            if (drawingCount == 0 || templateCount == 0)
+                return 0d;
+
+            int matchedDrawing = CountMatchedPixels(
+                drawingMask,
+                templateMask,
+                MatchTolerance);
+            int matchedTemplate = CountMatchedPixels(
+                templateMask,
+                drawingMask,
+                MatchTolerance);
 
             double precision = matchedDrawing / (double)drawingCount;
             double recall = matchedTemplate / (double)templateCount;
@@ -385,8 +423,56 @@ namespace CSharp_YoloOnnx
             if (precision + recall <= 0d)
                 return 0d;
 
-            double score = 2d * precision * recall / (precision + recall) * 100d;
-            return Math.Max(0d, Math.Min(100d, score));
+            return
+                2d * precision * recall /
+                (precision + recall) *
+                100d;
+        }
+
+        private static bool[,] RotateMask(
+            bool[,] source,
+            float angleDegrees)
+        {
+            if (Math.Abs(angleDegrees) < 0.001f)
+                return source;
+
+            int height = source.GetLength(0);
+            int width = source.GetLength(1);
+            bool[,] result = new bool[height, width];
+            double radians = angleDegrees * Math.PI / 180d;
+            double cosine = Math.Cos(radians);
+            double sine = Math.Sin(radians);
+            double centerX = (width - 1) / 2d;
+            double centerY = (height - 1) / 2d;
+
+            for (int destinationY = 0;
+                destinationY < height;
+                destinationY++)
+            {
+                double dy = destinationY - centerY;
+
+                for (int destinationX = 0;
+                    destinationX < width;
+                    destinationX++)
+                {
+                    double dx = destinationX - centerX;
+                    int sourceX = (int)Math.Round(
+                        cosine * dx + sine * dy + centerX);
+                    int sourceY = (int)Math.Round(
+                        -sine * dx + cosine * dy + centerY);
+
+                    if (sourceX >= 0 &&
+                        sourceX < width &&
+                        sourceY >= 0 &&
+                        sourceY < height &&
+                        source[sourceY, sourceX])
+                    {
+                        result[destinationY, destinationX] = true;
+                    }
+                }
+            }
+
+            return result;
         }
 
         private static bool[,] LoadNormalizedMask(string imagePath)

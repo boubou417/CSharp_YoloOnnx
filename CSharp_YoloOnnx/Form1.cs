@@ -2281,7 +2281,7 @@ namespace CSharp_YoloOnnx
                     : score >= 55d
                         ? Color.Gold
                         : Color.OrangeRed;
-            string title = "五角星相似度";
+            string title = "形狀相似度";
             string scoreText = score.ToString("0.0") + " 分";
             float panelWidth = Math.Max(
                 80f,
