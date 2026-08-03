@@ -40,6 +40,7 @@ namespace CSharp_YoloOnnx
 
         const int MinimumDrawingPoints = 12;
         const int FinishedDisplayMs = 2500;
+        const int MagicAnimationDisplayMs = 1800;
         const int FingertipMissingBreakMs = 500;
         const int FingertipMarkerVisibleMs = 400;
         const int FingertipInferenceIntervalMs = 67;
@@ -91,6 +92,9 @@ namespace CSharp_YoloOnnx
             new HandTrackingAnchor();
         Bitmap pendingDisplayImage;
         int displayUpdateScheduled;
+        Image magicAnimationImage;
+        MemoryStream magicAnimationStream;
+        DateTime magicAnimationStartedAt = DateTime.MinValue;
 
         InferenceSession yoloSession;
 
@@ -158,7 +162,7 @@ namespace CSharp_YoloOnnx
         {
             InitializeComponent();
 
-            Text = "CSharp YOLO ONNX V1.1";
+            Text = "CSharp YOLO ONNX V1.2";
             panelToolBar.Dock = DockStyle.Top;
             panelToolBar.Height = 40;
             panelStatusBar.Dock = DockStyle.Bottom;
@@ -169,6 +173,7 @@ namespace CSharp_YoloOnnx
             InitializeAirDrawControls();
             TryLoadDefaultTemplate();
             InitializeFingertipTracker();
+            InitializeMagicAnimation();
             FormClosed += Form1_FormClosed;
 
             ManagedSystem system = new ManagedSystem();
@@ -213,12 +218,132 @@ namespace CSharp_YoloOnnx
         {
             grabImage = false;
             DisposePendingDisplayImage();
+            DisposeMagicAnimation();
 
             if (fingertipTracker != null)
             {
                 fingertipTracker.Dispose();
                 fingertipTracker = null;
             }
+        }
+
+        private void InitializeMagicAnimation()
+        {
+            string animationPath = Path.Combine(
+                AppDomain.CurrentDomain.BaseDirectory,
+                "Assets",
+                "magic-cast-test.gif");
+
+            try
+            {
+                byte[] animationBytes = File.ReadAllBytes(animationPath);
+                magicAnimationStream =
+                    new MemoryStream(animationBytes, false);
+                magicAnimationImage =
+                    Image.FromStream(magicAnimationStream);
+                Debug.WriteLine("Magic animation = " + animationPath);
+            }
+            catch (Exception ex)
+            {
+                DisposeMagicAnimation();
+                Debug.WriteLine(
+                    "Magic animation initialization error: " + ex);
+            }
+        }
+
+        private void DisposeMagicAnimation()
+        {
+            if (magicAnimationImage != null)
+            {
+                ImageAnimator.StopAnimate(
+                    magicAnimationImage,
+                    MagicAnimationFrameChanged);
+                magicAnimationImage.Dispose();
+                magicAnimationImage = null;
+            }
+
+            if (magicAnimationStream != null)
+            {
+                magicAnimationStream.Dispose();
+                magicAnimationStream = null;
+            }
+
+            magicAnimationStartedAt = DateTime.MinValue;
+        }
+
+        private bool StartMagicAnimation()
+        {
+            if (magicAnimationImage == null ||
+                !ImageAnimator.CanAnimate(magicAnimationImage))
+            {
+                return false;
+            }
+
+            ImageAnimator.StopAnimate(
+                magicAnimationImage,
+                MagicAnimationFrameChanged);
+
+            Guid[] dimensions =
+                magicAnimationImage.FrameDimensionsList;
+
+            if (dimensions.Length > 0)
+            {
+                magicAnimationImage.SelectActiveFrame(
+                    new FrameDimension(dimensions[0]),
+                    0);
+            }
+
+            magicAnimationStartedAt = DateTime.Now;
+            ImageAnimator.Animate(
+                magicAnimationImage,
+                MagicAnimationFrameChanged);
+            return true;
+        }
+
+        private void MagicAnimationFrameChanged(
+            object sender,
+            EventArgs e)
+        {
+            // Live camera frames trigger repainting; no extra UI refresh is
+            // scheduled here so the GIF does not add rendering work.
+        }
+
+        private void DrawMagicAnimation(
+            Graphics graphics,
+            int imageWidth,
+            int imageHeight)
+        {
+            if (magicAnimationImage == null ||
+                magicAnimationStartedAt == DateTime.MinValue)
+            {
+                return;
+            }
+
+            if ((DateTime.Now - magicAnimationStartedAt)
+                    .TotalMilliseconds >= MagicAnimationDisplayMs)
+            {
+                ImageAnimator.StopAnimate(
+                    magicAnimationImage,
+                    MagicAnimationFrameChanged);
+                magicAnimationStartedAt = DateTime.MinValue;
+                return;
+            }
+
+            ImageAnimator.UpdateFrames(magicAnimationImage);
+
+            int animationSize = (int)Math.Min(
+                Math.Min(imageWidth, imageHeight) * 0.72f,
+                640f);
+            int left = (imageWidth - animationSize) / 2;
+            int top = (imageHeight - animationSize) / 2;
+
+            graphics.DrawImage(
+                magicAnimationImage,
+                new Rectangle(
+                    left,
+                    top,
+                    animationSize,
+                    animationSize));
         }
 
         private void InitializeAirDrawControls()
@@ -536,6 +661,7 @@ namespace CSharp_YoloOnnx
 
             Debug.WriteLine("===== Finish Drawing =====");
             Debug.WriteLine($"Trajectory Points = {drawingPoints.Count}");
+            bool drawingSaved = false;
 
             if (drawingPoints.Count < MinimumDrawingPoints)
             {
@@ -558,6 +684,7 @@ namespace CSharp_YoloOnnx
                     drawingPoints,
                     drawingStrokeStartIndices,
                     outputDirectory);
+                drawingSaved = true;
 
                 string selectedTemplate = templateImagePath;
 
@@ -595,6 +722,9 @@ namespace CSharp_YoloOnnx
                 drawingStatusText = "軌跡儲存或比對失敗，請查看 Debug 輸出";
                 Debug.WriteLine("Air Draw error: " + ex);
             }
+
+            if (drawingSaved && StartMagicAnimation())
+                drawingStatusText += "｜魔法施放！";
 
             drawingFinishedAt = DateTime.Now;
             gameState = GameState.Finished;
@@ -1707,6 +1837,7 @@ namespace CSharp_YoloOnnx
                 }
 
                 DrawFingertipMarker(g);
+                DrawMagicAnimation(g, copy.Width, copy.Height);
                 DrawAirDrawStatus(g, copy.Width);
                 DrawLiveDiagnostics(g, boxes.Count);
             }
