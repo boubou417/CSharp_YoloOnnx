@@ -1,5 +1,15 @@
 # 版本紀錄
 
+## V1.4 High Speed Tracking Test
+
+- Increase fingertip inference from about 15 FPS (67 ms) to a maximum of about 25 FPS (40 ms) while drawing.
+- Expand the active-hand search crop by 25% to tolerate delayed pose wrist coordinates.
+- Reduce drawing hand-presence threshold from 0.45 to 0.40.
+- Scale the accepted fingertip movement distance by elapsed sample time, up to three times the normal limit.
+- Insert bounded intermediate trajectory points every 12 pixels, with at most 16 points per detected segment.
+- Keep the existing 500 ms missing-fingertip stroke break so long tracking losses are not connected.
+- Preserve CUDA-first and automatic CPU fallback behavior.
+
 ## V1.3 CUDA Auto Selection Test
 
 - Replace the CPU-only ONNX Runtime package with `Microsoft.ML.OnnxRuntime.Gpu` 1.27.0.
