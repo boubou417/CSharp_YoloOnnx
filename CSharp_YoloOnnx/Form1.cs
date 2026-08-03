@@ -104,6 +104,7 @@ namespace CSharp_YoloOnnx
         Thread acquisitionThread;
         Thread poseInferenceThread;
         bool poseThreadComplete;
+        int poseFrameSlotReserved;
         Image magicAnimationImage;
         MemoryStream magicAnimationStream;
         DateTime magicAnimationStartedAt = DateTime.MinValue;
@@ -703,6 +704,9 @@ namespace CSharp_YoloOnnx
                     finally
                     {
                         inferenceImage.Dispose();
+                        Interlocked.Exchange(
+                            ref poseFrameSlotReserved,
+                            0);
                     }
                 }
             }
@@ -717,6 +721,16 @@ namespace CSharp_YoloOnnx
         {
             if (displayImage == null || !grabImage)
                 return;
+
+            // Reserve only one frame for YOLO. While inference is running,
+            // camera/display frames continue without cloning large Bitmaps.
+            if (Interlocked.CompareExchange(
+                ref poseFrameSlotReserved,
+                1,
+                0) != 0)
+            {
+                return;
+            }
 
             Bitmap inferenceCopy = null;
 
@@ -738,6 +752,13 @@ namespace CSharp_YoloOnnx
                 replaced?.Dispose();
                 poseFrameReady.Set();
             }
+            catch
+            {
+                Interlocked.Exchange(
+                    ref poseFrameSlotReserved,
+                    0);
+                throw;
+            }
             finally
             {
                 inferenceCopy?.Dispose();
@@ -751,6 +772,9 @@ namespace CSharp_YoloOnnx
                     ref pendingPoseImage,
                     null);
             pending?.Dispose();
+            Interlocked.Exchange(
+                ref poseFrameSlotReserved,
+                0);
         }
 
         private void StartDrawing(
@@ -2178,10 +2202,6 @@ namespace CSharp_YoloOnnx
                 DrawMagicAnimation(g, copy.Width, copy.Height);
                 DrawSimilarityResult(g, copy.Width, copy.Height);
                 DrawAirDrawStatus(g, copy.Width);
-                DrawLiveDiagnostics(
-                    g,
-                    boxes.Count,
-                    poseInferenceMilliseconds);
             }
         }
 
@@ -2252,42 +2272,6 @@ namespace CSharp_YoloOnnx
             {
                 bitmap.Dispose();
                 throw;
-            }
-        }
-
-        private void DrawLiveDiagnostics(
-            Graphics graphics,
-            int personCount,
-            double poseInferenceMilliseconds)
-        {
-            string text =
-                "LIVE | YOLO persons: " +
-                personCount +
-                " | Pose: " +
-                poseInferenceMilliseconds.ToString("0") +
-                " ms";
-
-            using (Font font = new Font(
-                "Microsoft JhengHei UI",
-                10f,
-                FontStyle.Bold))
-            using (Brush background =
-                new SolidBrush(Color.FromArgb(170, 0, 0, 0)))
-            {
-                SizeF textSize = graphics.MeasureString(text, font);
-                RectangleF backgroundBounds = new RectangleF(
-                    8f,
-                    8f,
-                    textSize.Width + 16f,
-                    textSize.Height + 8f);
-
-                graphics.FillRectangle(background, backgroundBounds);
-                graphics.DrawString(
-                    text,
-                    font,
-                    Brushes.Lime,
-                    16f,
-                    12f);
             }
         }
 
