@@ -1818,7 +1818,14 @@ namespace CSharp_YoloOnnx
 
         private bool UpdatePinchGesture(DateTime now)
         {
-            pinchMissingSince = DateTime.MinValue;
+            if (string.Equals(
+                fingertipTrackingMode,
+                "LANDMARK",
+                StringComparison.Ordinal))
+            {
+                pinchMissingSince =
+                    DateTime.MinValue;
+            }
 
             if (!pinchInProgress)
             {
