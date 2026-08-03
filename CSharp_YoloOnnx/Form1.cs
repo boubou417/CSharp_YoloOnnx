@@ -111,6 +111,7 @@ namespace CSharp_YoloOnnx
         DateTime magicAnimationStartedAt = DateTime.MinValue;
 
         InferenceSession yoloSession;
+        string yoloExecutionProvider = "CPU";
 
         // The bundled YOLO pose model has a fixed 640 x 640 input.
         // Keep these dimensions aligned with the ONNX input metadata.
@@ -229,22 +230,84 @@ namespace CSharp_YoloOnnx
             }
 
             string modelPath = "yolov8n-pose.onnx";
+            InitializeYoloSession(modelPath);
+            Text =
+                "CSharp YOLO ONNX V1.3 Performance Test | " +
+                yoloExecutionProvider;
+        }
 
-            using (SessionOptions sessionOptions = new SessionOptions())
+        private void InitializeYoloSession(
+            string modelPath)
+        {
+            try
             {
-                sessionOptions.GraphOptimizationLevel =
-                    GraphOptimizationLevel.ORT_ENABLE_ALL;
-                sessionOptions.ExecutionMode =
-                    ExecutionMode.ORT_SEQUENTIAL;
-                sessionOptions.IntraOpNumThreads = Math.Max(
+                using (SessionOptions cudaOptions =
+                    new SessionOptions())
+                {
+                    ConfigureCommonSessionOptions(
+                        cudaOptions,
+                        false);
+                    cudaOptions.AppendExecutionProvider_CUDA(0);
+
+                    yoloSession =
+                        new InferenceSession(
+                            modelPath,
+                            cudaOptions);
+                }
+
+                yoloExecutionProvider = "CUDA GPU";
+                Debug.WriteLine(
+                    "YOLO execution provider = CUDA GPU");
+                return;
+            }
+            catch (Exception cudaException)
+            {
+                if (yoloSession != null)
+                {
+                    yoloSession.Dispose();
+                    yoloSession = null;
+                }
+
+                Debug.WriteLine(
+                    "CUDA is unavailable; falling back to CPU. " +
+                    cudaException);
+            }
+
+            using (SessionOptions cpuOptions =
+                new SessionOptions())
+            {
+                ConfigureCommonSessionOptions(
+                    cpuOptions,
+                    true);
+
+                yoloSession =
+                    new InferenceSession(
+                        modelPath,
+                        cpuOptions);
+            }
+
+            yoloExecutionProvider = "CPU fallback";
+            Debug.WriteLine(
+                "YOLO execution provider = CPU fallback");
+        }
+
+        private static void ConfigureCommonSessionOptions(
+            SessionOptions sessionOptions,
+            bool configureCpuThreads)
+        {
+            sessionOptions.GraphOptimizationLevel =
+                GraphOptimizationLevel.ORT_ENABLE_ALL;
+            sessionOptions.ExecutionMode =
+                ExecutionMode.ORT_SEQUENTIAL;
+
+            if (!configureCpuThreads)
+                return;
+
+            sessionOptions.IntraOpNumThreads =
+                Math.Max(
                     1,
                     Environment.ProcessorCount - 1);
-                sessionOptions.InterOpNumThreads = 1;
-
-                yoloSession = new InferenceSession(
-                    modelPath,
-                    sessionOptions);
-            }
+            sessionOptions.InterOpNumThreads = 1;
         }
 
         private void InitializeFingertipTracker()
