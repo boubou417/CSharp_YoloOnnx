@@ -102,10 +102,10 @@ namespace CSharp_YoloOnnx
 
         InferenceSession yoloSession;
 
-        // 512 keeps pose accuracy practical while reducing tensor and CPU
-        // inference work by 36% compared with the previous 640 x 640 input.
-        const int yoloImgWidth = 512;
-        const int yoloImgHeight = 512;
+        // The bundled YOLO pose model has a fixed 640 x 640 input.
+        // Keep these dimensions aligned with the ONNX input metadata.
+        const int yoloImgWidth = 640;
+        const int yoloImgHeight = 640;
 
         float _ratio;
         int newW;
