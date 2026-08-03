@@ -43,7 +43,7 @@ namespace CSharp_YoloOnnx
         const int MagicAnimationDisplayMs = 1800;
         const int FingertipMissingBreakMs = 500;
         const int FingertipMarkerVisibleMs = 400;
-        const int FingertipInferenceIntervalMs = 40;
+        const int FingertipInferenceIntervalMs = 67;
         const int IdleHandInferenceIntervalMs = 120;
         const int OpenPalmStartDelayMs = 600;
         const int StartGestureMissingGraceMs = 300;
@@ -60,10 +60,7 @@ namespace CSharp_YoloOnnx
         const float OpenPalmReleaseScore = 0.50f;
         const float MinimumPoseHandKeypointScore = 0.35f;
         const float MinimumIdleHandPresence = 0.35f;
-        const float MinimumDrawingHandPresence = 0.40f;
-        const float DrawingHandCropScale = 1.25f;
-        const float InterpolatedPointSpacing = 12f;
-        const int MaximumInterpolatedPoints = 16;
+        const float MinimumDrawingHandPresence = 0.45f;
 
         DateTime drawingFinishedAt = DateTime.MinValue;
         DateTime fingertipMissingSince = DateTime.MinValue;
@@ -205,7 +202,7 @@ namespace CSharp_YoloOnnx
         {
             InitializeComponent();
 
-            Text = "CSharp YOLO ONNX V1.4 High Speed Tracking Test";
+            Text = "CSharp YOLO ONNX V1.3 Stable Tracking";
             panelToolBar.Dock = DockStyle.Top;
             panelToolBar.Height = 40;
             panelStatusBar.Dock = DockStyle.Bottom;
@@ -235,7 +232,7 @@ namespace CSharp_YoloOnnx
             string modelPath = "yolov8n-pose.onnx";
             InitializeYoloSession(modelPath);
             Text =
-                "CSharp YOLO ONNX V1.4 High Speed Tracking Test | " +
+                "CSharp YOLO ONNX V1.3 Stable Tracking | " +
                 yoloExecutionProvider;
         }
 
@@ -996,45 +993,6 @@ namespace CSharp_YoloOnnx
             gameState = GameState.Finished;
         }
 
-        private void AddDrawingSegment(
-            PointF point)
-        {
-            if (gameState != GameState.Drawing ||
-                drawingStrokeStartPending ||
-                drawingPoints.Count == 0)
-            {
-                AddDrawingPoint(point);
-                return;
-            }
-
-            PointF start =
-                drawingPoints[drawingPoints.Count - 1];
-            float dx = point.X - start.X;
-            float dy = point.Y - start.Y;
-            float distance =
-                (float)Math.Sqrt(dx * dx + dy * dy);
-            int steps =
-                Math.Max(
-                    1,
-                    Math.Min(
-                        MaximumInterpolatedPoints,
-                        (int)Math.Ceiling(
-                            distance /
-                            InterpolatedPointSpacing)));
-
-            for (int step = 1;
-                step <= steps;
-                step++)
-            {
-                float amount =
-                    step / (float)steps;
-                AddDrawingPoint(
-                    new PointF(
-                        start.X + dx * amount,
-                        start.Y + dy * amount));
-            }
-        }
-
         private void AddDrawingPoint(PointF pt)
         {
             if (gameState != GameState.Drawing)
@@ -1245,7 +1203,7 @@ namespace CSharp_YoloOnnx
                         }
                         else
                         {
-                            AddDrawingSegment(fingertip);
+                            AddDrawingPoint(fingertip);
                             drawingStatusText =
                                 "繪圖中（" +
                                 GetHandDisplayName(
@@ -1602,17 +1560,11 @@ namespace CSharp_YoloOnnx
                     hand == activeDrawingHand
                         ? MinimumDrawingHandPresence
                         : MinimumIdleHandPresence;
-                float cropScale =
-                    gameState == GameState.Drawing &&
-                    hand == activeDrawingHand
-                        ? DrawingHandCropScale
-                        : 1f;
                 bool detected = fingertipTracker.TryDetect(
                     frame,
                     wrist,
                     elbow,
                     minimumHandPresence,
-                    cropScale,
                     out result);
 
                 if (!detected)
@@ -1743,22 +1695,8 @@ namespace CSharp_YoloOnnx
                 PointF previous = lastFingertipPoint.Value;
                 float dx = detected.X - previous.X;
                 float dy = detected.Y - previous.Y;
-                double elapsedMilliseconds =
-                    Math.Max(
-                        FingertipInferenceIntervalMs,
-                        (now - lastFingertipSeenAt)
-                            .TotalMilliseconds);
-                float speedAllowance =
-                    Math.Max(
-                        1f,
-                        Math.Min(
-                            3f,
-                            (float)(
-                                elapsedMilliseconds /
-                                FingertipInferenceIntervalMs)));
                 float maximumJump =
-                    GetMaximumFingertipJump(person) *
-                    speedAllowance;
+                    GetMaximumFingertipJump(person);
 
                 if (dx * dx + dy * dy >
                     maximumJump * maximumJump)
