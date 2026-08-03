@@ -646,6 +646,7 @@ namespace CSharp_YoloOnnx
                 poseThreadComplete = false;
                 latestPoseSnapshot = PoseSnapshot.Empty;
                 DisposePendingPoseImage();
+                ResetPerformanceDiagnostics();
 
                 poseInferenceThread =
                     new Thread(ThreadPoseInference)
@@ -1563,6 +1564,7 @@ namespace CSharp_YoloOnnx
                 person.Keypoints.Count <= 10 ||
                 hand == DrawingHand.None)
             {
+                latestHandInferenceResult = "NO ROI";
                 return false;
             }
 
@@ -1607,6 +1609,7 @@ namespace CSharp_YoloOnnx
             }
             else
             {
+                latestHandInferenceResult = "NO ROI";
                 return false;
             }
 
@@ -2629,6 +2632,19 @@ namespace CSharp_YoloOnnx
             progress = 0f;
             pinchGesture = false;
             return false;
+        }
+
+        private void ResetPerformanceDiagnostics()
+        {
+            cameraFrameCount = 0;
+            displayFrameCount = 0;
+            cameraFramesPerSecond = 0d;
+            displayFramesPerSecond = 0d;
+            poseFramesPerSecond = 0d;
+            latestHandInferenceMilliseconds = 0d;
+            latestHandInferenceResult = "WAIT";
+            cameraFpsStopwatch.Restart();
+            displayFpsStopwatch.Restart();
         }
 
         private void RecordCameraFrame()
