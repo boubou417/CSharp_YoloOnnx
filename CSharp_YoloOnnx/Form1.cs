@@ -78,6 +78,7 @@ namespace CSharp_YoloOnnx
         string templateImagePath = string.Empty;
         double? lastDrawingScore;
         Button btnSelectTemplate;
+        Label lblAirDrawStatus;
         FingertipTracker fingertipTracker;
         PointF? lastFingertipPoint;
         PointF? displayedFingertipPoint;
@@ -428,6 +429,19 @@ namespace CSharp_YoloOnnx
 
             btnSelectTemplate.Click += btnSelectTemplate_Click;
             panelToolBar.Controls.Add(btnSelectTemplate);
+
+            lblAirDrawStatus = new Label
+            {
+                Dock = DockStyle.Fill,
+                AutoEllipsis = true,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Padding = new Padding(6, 0, 6, 0),
+                ForeColor = Color.Black,
+                BackColor = SystemColors.Control,
+                Text = drawingStatusText
+            };
+            panelStatusBar.Controls.Add(lblAirDrawStatus);
+            lblAirDrawStatus.BringToFront();
         }
 
         private void TryLoadDefaultTemplate()
@@ -1841,7 +1855,10 @@ namespace CSharp_YoloOnnx
                 if (IsDisposed || Disposing || pBox.IsDisposed)
                     latest.Dispose();
                 else
+                {
                     pictureBoxInvoke(latest);
+                    UpdateAirDrawStatusBar();
+                }
             }
 
             Interlocked.Exchange(ref displayUpdateScheduled, 0);
@@ -2201,7 +2218,6 @@ namespace CSharp_YoloOnnx
                 DrawFingertipMarker(g);
                 DrawMagicAnimation(g, copy.Width, copy.Height);
                 DrawSimilarityResult(g, copy.Width, copy.Height);
-                DrawAirDrawStatus(g, copy.Width);
             }
         }
 
@@ -2471,48 +2487,39 @@ namespace CSharp_YoloOnnx
             return false;
         }
 
-        private void DrawAirDrawStatus(Graphics graphics, int imageWidth)
+        private void UpdateAirDrawStatusBar()
         {
+            if (lblAirDrawStatus == null ||
+                lblAirDrawStatus.IsDisposed)
+            {
+                return;
+            }
+
             string stateText;
-            Color stateColor;
 
             switch (gameState)
             {
                 case GameState.Drawing:
                     stateText = "DRAWING";
-                    stateColor = Color.Lime;
                     break;
 
                 case GameState.Scoring:
                     stateText = "SCORING";
-                    stateColor = Color.Orange;
                     break;
 
                 case GameState.Finished:
                     stateText = "FINISHED";
-                    stateColor = lastDrawingScore.HasValue ? Color.Cyan : Color.Yellow;
                     break;
 
                 default:
                     stateText = "READY";
-                    stateColor = Color.White;
                     break;
             }
 
-            string message = stateText + "｜" + drawingStatusText;
-
-            using (Font font = new Font("Microsoft JhengHei UI", 14f, FontStyle.Bold))
-            {
-                SizeF textSize = graphics.MeasureString(message, font);
-                float width = Math.Min(imageWidth - 20f, textSize.Width + 24f);
-
-                using (Brush background = new SolidBrush(Color.FromArgb(170, 0, 0, 0)))
-                using (Brush foreground = new SolidBrush(stateColor))
-                {
-                    graphics.FillRectangle(background, 10f, 10f, width, textSize.Height + 16f);
-                    graphics.DrawString(message, font, foreground, 20f, 18f);
-                }
-            }
+            lblAirDrawStatus.Text =
+                stateText +
+                "｜" +
+                drawingStatusText;
         }
 
         private void DrawSimilarityResult(
