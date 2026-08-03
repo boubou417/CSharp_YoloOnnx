@@ -1,5 +1,13 @@
 # 版本紀錄
 
+## V1.3 CUDA Auto Selection Test
+
+- Replace the CPU-only ONNX Runtime package with `Microsoft.ML.OnnxRuntime.Gpu` 1.27.0.
+- Try NVIDIA CUDA device 0 when the application starts.
+- Automatically create a CPU session when CUDA, cuDNN, the driver, or the CUDA provider is unavailable.
+- Show `CUDA GPU` or `CPU fallback` in the window title.
+- Keep the fixed YOLO pose input at 640 x 640.
+
 ## V1.3 Performance Test
 
 - Split camera acquisition/display and YOLO pose inference into independent background threads.
