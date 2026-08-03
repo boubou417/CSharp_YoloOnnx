@@ -1,5 +1,15 @@
 # 版本紀錄
 
+## Live Pipeline Diagnostics
+
+- Add a WinForms-only diagnostics panel at the bottom-right; nothing is drawn over the camera image.
+- Measure actual camera acquisition FPS and displayed-frame FPS over one-second windows.
+- Show YOLO pose inference milliseconds and its equivalent maximum inference FPS.
+- Measure the latest TensorFlow Lite hand-landmark invocation time.
+- Show hand results as `FOUND`, `LOST`, `NO ROI`, `ERROR`, or `WAIT`.
+- Reset all diagnostic counters whenever acquisition starts.
+- Preserve stable landmark-only tracking, CUDA/CPU fallback, and the external similarity score panel.
+
 ## WinForms Similarity Score Panel
 
 - Remove the shape-similarity panel from the camera bitmap.
