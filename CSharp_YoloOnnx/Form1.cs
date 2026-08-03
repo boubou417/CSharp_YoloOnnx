@@ -102,8 +102,10 @@ namespace CSharp_YoloOnnx
 
         InferenceSession yoloSession;
 
-        const int yoloImgWidth = 640;
-        const int yoloImgHeight = 640;
+        // 512 keeps pose accuracy practical while reducing tensor and CPU
+        // inference work by 36% compared with the previous 640 x 640 input.
+        const int yoloImgWidth = 512;
+        const int yoloImgHeight = 512;
 
         float _ratio;
         int newW;
@@ -194,7 +196,22 @@ namespace CSharp_YoloOnnx
             }
 
             string modelPath = "yolov8n-pose.onnx";
-            yoloSession = new InferenceSession(modelPath);
+
+            using (SessionOptions sessionOptions = new SessionOptions())
+            {
+                sessionOptions.GraphOptimizationLevel =
+                    GraphOptimizationLevel.ORT_ENABLE_ALL;
+                sessionOptions.ExecutionMode =
+                    ExecutionMode.ORT_SEQUENTIAL;
+                sessionOptions.IntraOpNumThreads = Math.Max(
+                    1,
+                    Environment.ProcessorCount - 1);
+                sessionOptions.InterOpNumThreads = 1;
+
+                yoloSession = new InferenceSession(
+                    modelPath,
+                    sessionOptions);
+            }
         }
 
         private void InitializeFingertipTracker()
@@ -222,6 +239,12 @@ namespace CSharp_YoloOnnx
         {
             grabImage = false;
             DisposePendingDisplayImage();
+
+            if (yoloSession != null)
+            {
+                yoloSession.Dispose();
+                yoloSession = null;
+            }
             DisposeMagicAnimation();
 
             if (fingertipTracker != null)
@@ -451,7 +474,12 @@ namespace CSharp_YoloOnnx
             {
                 cam.BeginAcquisition();
                 grabImage = true;
-                Thread thread = new Thread(ThreadGetImages);
+                Thread thread = new Thread(ThreadGetImages)
+                {
+                    IsBackground = true,
+                    Priority = ThreadPriority.AboveNormal,
+                    Name = "Camera acquisition and inference"
+                };
                 thread.Start();
 
                 streaming = true;
@@ -478,19 +506,28 @@ namespace CSharp_YoloOnnx
         {
             IManagedImageProcessor processor = new ManagedImageProcessor();
             IManagedImage convertedImage = new ManagedImage();
-            IManagedImage deepCopyImage = new ManagedImage();
 
             DenseTensor<float> tensor = new DenseTensor<float>(new[] { 1, 3, yoloImgHeight, yoloImgWidth });
 
             while (grabImage)
             {
                 IManagedImage rawImage = cam.GetNextImage();
-                processor.Convert(rawImage, convertedImage, PixelFormatEnums.BGR8);
-                rawImage.Release();
 
-                deepCopyImage.DeepCopy(convertedImage);
+                try
+                {
+                    processor.Convert(
+                        rawImage,
+                        convertedImage,
+                        PixelFormatEnums.BGR8);
+                }
+                finally
+                {
+                    rawImage.Release();
+                }
 
-                CreateTensorFromFLIR(deepCopyImage, ref tensor);
+                // convertedImage remains valid until the next Convert call;
+                // avoid a full-frame DeepCopy on every camera frame.
+                CreateTensorFromFLIR(convertedImage, ref tensor);
 
                 List<Detection> finalBoxes;
 
@@ -586,7 +623,7 @@ namespace CSharp_YoloOnnx
                 //}
 
                 Bitmap displayBmp = CreateDisplayImage(
-                    deepCopyImage,
+                    convertedImage,
                     finalBoxes,
                     main);
                 QueueDisplayImage(displayBmp);
@@ -1596,7 +1633,9 @@ namespace CSharp_YoloOnnx
         {
             Image old = pBox.Image;
             pBox.Image = bmp;
-            pBox.Refresh();
+            // Let Windows coalesce paint requests instead of blocking the UI
+            // thread until PictureBox finishes repainting each frame.
+            pBox.Invalidate();
             old?.Dispose();
         }
 
@@ -1739,7 +1778,9 @@ namespace CSharp_YoloOnnx
             using (Pen eyePen = new Pen(Color.Magenta, 3))
             {
                 g.SmoothingMode = SmoothingMode.AntiAlias;
-                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                g.CompositingQuality = CompositingQuality.HighSpeed;
+                g.PixelOffsetMode = PixelOffsetMode.HighSpeed;
+                g.InterpolationMode = InterpolationMode.Low;
 
                 mainPen.StartCap = LineCap.Round;
                 mainPen.EndCap = LineCap.Round;
