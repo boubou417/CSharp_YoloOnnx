@@ -96,6 +96,14 @@ namespace CSharp_YoloOnnx
             new HandTrackingAnchor();
         Bitmap pendingDisplayImage;
         int displayUpdateScheduled;
+        Bitmap pendingPoseImage;
+        readonly AutoResetEvent poseFrameReady =
+            new AutoResetEvent(false);
+        volatile PoseSnapshot latestPoseSnapshot =
+            PoseSnapshot.Empty;
+        Thread acquisitionThread;
+        Thread poseInferenceThread;
+        bool poseThreadComplete;
         Image magicAnimationImage;
         MemoryStream magicAnimationStream;
         DateTime magicAnimationStartedAt = DateTime.MinValue;
@@ -150,6 +158,29 @@ namespace CSharp_YoloOnnx
             Right
         }
 
+        private sealed class PoseSnapshot
+        {
+            public static readonly PoseSnapshot Empty =
+                new PoseSnapshot(
+                    new List<Detection>(),
+                    null,
+                    0d);
+
+            public readonly List<Detection> Boxes;
+            public readonly Detection Main;
+            public readonly double InferenceMilliseconds;
+
+            public PoseSnapshot(
+                List<Detection> boxes,
+                Detection main,
+                double inferenceMilliseconds)
+            {
+                Boxes = boxes ?? new List<Detection>();
+                Main = main;
+                InferenceMilliseconds = inferenceMilliseconds;
+            }
+        }
+
         private sealed class HandTrackingAnchor
         {
             public PointF Wrist;
@@ -168,7 +199,7 @@ namespace CSharp_YoloOnnx
         {
             InitializeComponent();
 
-            Text = "CSharp YOLO ONNX V1.2";
+            Text = "CSharp YOLO ONNX V1.3 Performance Test";
             panelToolBar.Dock = DockStyle.Top;
             panelToolBar.Height = 40;
             panelStatusBar.Dock = DockStyle.Bottom;
@@ -238,7 +269,16 @@ namespace CSharp_YoloOnnx
         private void Form1_FormClosed(object sender, FormClosedEventArgs e)
         {
             grabImage = false;
+            poseFrameReady.Set();
+
+            if (acquisitionThread != null)
+                acquisitionThread.Join(1500);
+
+            if (poseInferenceThread != null)
+                poseInferenceThread.Join(1500);
+
             DisposePendingDisplayImage();
+            DisposePendingPoseImage();
 
             if (yoloSession != null)
             {
@@ -474,13 +514,28 @@ namespace CSharp_YoloOnnx
             {
                 cam.BeginAcquisition();
                 grabImage = true;
-                Thread thread = new Thread(ThreadGetImages)
-                {
-                    IsBackground = true,
-                    Priority = ThreadPriority.AboveNormal,
-                    Name = "Camera acquisition and inference"
-                };
-                thread.Start();
+                threadComplete = false;
+                poseThreadComplete = false;
+                latestPoseSnapshot = PoseSnapshot.Empty;
+                DisposePendingPoseImage();
+
+                poseInferenceThread =
+                    new Thread(ThreadPoseInference)
+                    {
+                        IsBackground = true,
+                        Priority = ThreadPriority.Normal,
+                        Name = "YOLO pose inference"
+                    };
+                acquisitionThread =
+                    new Thread(ThreadGetImages)
+                    {
+                        IsBackground = true,
+                        Priority = ThreadPriority.AboveNormal,
+                        Name = "Camera acquisition and display"
+                    };
+
+                poseInferenceThread.Start();
+                acquisitionThread.Start();
 
                 streaming = true;
                 btnGrab.Text = "Stop";
@@ -488,14 +543,22 @@ namespace CSharp_YoloOnnx
             else
             {
                 grabImage = false;
+                poseFrameReady.Set();
 
-                while (!threadComplete)
-                    Thread.Sleep(200);
+                while (!threadComplete || !poseThreadComplete)
+                {
+                    Application.DoEvents();
+                    Thread.Sleep(10);
+                }
 
                 cam.EndAcquisition();
+                DisposePendingPoseImage();
 
                 streaming = false;
                 threadComplete = false;
+                poseThreadComplete = false;
+                acquisitionThread = null;
+                poseInferenceThread = null;
                 btnGrab.Text = "Grab";
             }
         }
@@ -504,132 +567,190 @@ namespace CSharp_YoloOnnx
 
         private void ThreadGetImages()
         {
-            IManagedImageProcessor processor = new ManagedImageProcessor();
-            IManagedImage convertedImage = new ManagedImage();
+            IManagedImageProcessor processor =
+                new ManagedImageProcessor();
+            IManagedImage convertedImage =
+                new ManagedImage();
 
-            DenseTensor<float> tensor = new DenseTensor<float>(new[] { 1, 3, yoloImgHeight, yoloImgWidth });
-
-            while (grabImage)
+            try
             {
-                IManagedImage rawImage = cam.GetNextImage();
-
-                try
+                while (grabImage)
                 {
-                    processor.Convert(
-                        rawImage,
-                        convertedImage,
-                        PixelFormatEnums.BGR8);
+                    IManagedImage rawImage =
+                        cam.GetNextImage();
+
+                    try
+                    {
+                        processor.Convert(
+                            rawImage,
+                            convertedImage,
+                            PixelFormatEnums.BGR8);
+                    }
+                    finally
+                    {
+                        rawImage.Release();
+                    }
+
+                    Bitmap displayImage =
+                        CopyManagedImageToBitmap(
+                            convertedImage);
+
+                    QueueLatestPoseFrame(displayImage);
+
+                    PoseSnapshot snapshot =
+                        latestPoseSnapshot ??
+                        PoseSnapshot.Empty;
+
+                    RenderDisplayImage(
+                        displayImage,
+                        snapshot.Boxes,
+                        snapshot.Main,
+                        snapshot.InferenceMilliseconds);
+                    QueueDisplayImage(displayImage);
                 }
-                finally
-                {
-                    rawImage.Release();
-                }
-
-                // convertedImage remains valid until the next Convert call;
-                // avoid a full-frame DeepCopy on every camera frame.
-                CreateTensorFromFLIR(convertedImage, ref tensor);
-
-                List<Detection> finalBoxes;
-
-                using (var output = yoloSession.Run(new[]
-                {
-                    NamedOnnxValue.CreateFromTensor("images", tensor)
-                }))
-                {
-                    Tensor<float> resultTensor =
-                        output.First().AsTensor<float>();
-                    finalBoxes = PostProcess(resultTensor);
-                }
-
-                // 🔥 揮手偵測（主角：最大人）
-                isWaving = false;
-                var main = finalBoxes.OrderByDescending(d => d.W * d.H).FirstOrDefault();
-
-                //if (main != null)
-                //{
-                //    bool handRaised = IsRightHandRaised(main);
-                //    bool handOnChest = IsRightHandOnChest(main);
-                //    var wrist = main.Keypoints[10]; // 右手腕
-                //    var shoulder = main.Keypoints[6]; // 右肩
-
-                //    if (wrist.Score > 0.5f && shoulder.Score > 0.5f)
-                //    {
-                //        float x = (wrist.X - _padX) / _ratio;
-                //        float y = (wrist.Y - _padY) / _ratio;
-
-                //        //if (y < (shoulder.Y - _padY) / _ratio)
-                //        if (handRaised)
-                //        {
-                //            // 第一次舉手，開始收集
-                //            if (gameState == GameState.Idle)
-                //            {
-                //                StartDrawing();
-                //            }
-
-                //            PointF pt = new PointF(x, y);
-
-                //            rightHandHistory.Enqueue(x);
-
-                //            handTrail.Add(pt);
-                //            AddDrawingPoint(pt);
-
-                //            if (rightHandHistory.Count > 12)
-                //                rightHandHistory.Dequeue();
-
-                //            if (handTrail.Count > 20)
-                //                handTrail.RemoveAt(0);
-
-                //            if (rightHandHistory.Count >= 10)
-                //            {
-                //                float minX = rightHandHistory.Min();
-                //                float maxX = rightHandHistory.Max();
-
-                //                if ((maxX - minX) > 80)
-                //                    isWaving = true;
-                //            }
-                //        }
-                //        else
-                //        {
-                //            // 手放下
-                //            if (gameState == GameState.Drawing)
-                //            {
-                //                StopDrawing();
-                //            }
-
-                //            rightHandHistory.Clear();
-                //            handTrail.Clear();
-                //        }
-                //        //if (y < (shoulder.Y - _padY) / _ratio)
-                //        //{
-                //        //    rightHandHistory.Enqueue(x);
-                //        //    handTrail.Add(new PointF(x, y));
-
-                //        //    if (rightHandHistory.Count > 12) rightHandHistory.Dequeue();
-                //        //    if (handTrail.Count > 20) handTrail.RemoveAt(0);
-
-                //        //    if (rightHandHistory.Count >= 10)
-                //        //    {
-                //        //        float minX = rightHandHistory.Min();
-                //        //        float maxX = rightHandHistory.Max();
-                //        //        if ((maxX - minX) > 80) isWaving = true;
-                //        //    }
-                //        //}
-                //        //else
-                //        //{
-                //        //    rightHandHistory.Clear();
-                //        //    handTrail.Clear();
-                //        //}
-                //    }
-                //}
-
-                Bitmap displayBmp = CreateDisplayImage(
-                    convertedImage,
-                    finalBoxes,
-                    main);
-                QueueDisplayImage(displayBmp);
             }
+            catch (Exception ex)
+            {
+                Debug.WriteLine(
+                    "Camera/display thread error: " + ex);
+            }
+            finally
+            {
+                threadComplete = true;
+                poseFrameReady.Set();
+            }
+        }
 
-            threadComplete = true;
+        private void ThreadPoseInference()
+        {
+            DenseTensor<float> tensor =
+                new DenseTensor<float>(
+                    new[]
+                    {
+                        1,
+                        3,
+                        yoloImgHeight,
+                        yoloImgWidth
+                    });
+
+            try
+            {
+                while (grabImage ||
+                    Interlocked.CompareExchange(
+                        ref pendingPoseImage,
+                        null,
+                        null) != null)
+                {
+                    poseFrameReady.WaitOne(100);
+
+                    Bitmap inferenceImage =
+                        Interlocked.Exchange(
+                            ref pendingPoseImage,
+                            null);
+
+                    if (inferenceImage == null)
+                        continue;
+
+                    try
+                    {
+                        Stopwatch stopwatch =
+                            Stopwatch.StartNew();
+
+                        CreateTensorFromBitmap(
+                            inferenceImage,
+                            ref tensor);
+
+                        List<Detection> finalBoxes;
+
+                        using (var output =
+                            yoloSession.Run(new[]
+                            {
+                                NamedOnnxValue.CreateFromTensor(
+                                    "images",
+                                    tensor)
+                            }))
+                        {
+                            Tensor<float> resultTensor =
+                                output.First()
+                                    .AsTensor<float>();
+                            finalBoxes =
+                                PostProcess(resultTensor);
+                        }
+
+                        Detection main =
+                            finalBoxes
+                                .OrderByDescending(
+                                    detection =>
+                                        detection.W *
+                                        detection.H)
+                                .FirstOrDefault();
+
+                        stopwatch.Stop();
+
+                        latestPoseSnapshot =
+                            new PoseSnapshot(
+                                finalBoxes,
+                                main,
+                                stopwatch.Elapsed
+                                    .TotalMilliseconds);
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine(
+                            "YOLO inference thread error: " +
+                            ex);
+                    }
+                    finally
+                    {
+                        inferenceImage.Dispose();
+                    }
+                }
+            }
+            finally
+            {
+                poseThreadComplete = true;
+            }
+        }
+
+        private void QueueLatestPoseFrame(
+            Bitmap displayImage)
+        {
+            if (displayImage == null || !grabImage)
+                return;
+
+            Bitmap inferenceCopy = null;
+
+            try
+            {
+                inferenceCopy = displayImage.Clone(
+                    new Rectangle(
+                        0,
+                        0,
+                        displayImage.Width,
+                        displayImage.Height),
+                    PixelFormat.Format24bppRgb);
+
+                Bitmap replaced =
+                    Interlocked.Exchange(
+                        ref pendingPoseImage,
+                        inferenceCopy);
+                inferenceCopy = null;
+                replaced?.Dispose();
+                poseFrameReady.Set();
+            }
+            finally
+            {
+                inferenceCopy?.Dispose();
+            }
+        }
+
+        private void DisposePendingPoseImage()
+        {
+            Bitmap pending =
+                Interlocked.Exchange(
+                    ref pendingPoseImage,
+                    null);
+            pending?.Dispose();
         }
 
         private void StartDrawing(
@@ -1763,10 +1884,109 @@ namespace CSharp_YoloOnnx
             }
         }
 
-        private Bitmap CreateDisplayImage(IManagedImage img, List<Detection> boxes, Detection main)
+        private void CreateTensorFromBitmap(
+            Bitmap bitmap,
+            ref DenseTensor<float> tensor)
         {
-            Bitmap copy = CopyManagedImageToBitmap(img);
+            Span<float> span = tensor.Buffer.Span;
+            span.Clear();
 
+            int hw = yoloImgWidth * yoloImgHeight;
+            int rOffset = 0;
+            int gOffset = hw;
+            int bOffset = hw * 2;
+            const float inverse255 = 1.0f / 255.0f;
+
+            Rectangle bounds =
+                new Rectangle(
+                    0,
+                    0,
+                    bitmap.Width,
+                    bitmap.Height);
+            BitmapData bitmapData =
+                bitmap.LockBits(
+                    bounds,
+                    ImageLockMode.ReadOnly,
+                    PixelFormat.Format24bppRgb);
+
+            try
+            {
+                unsafe
+                {
+                    byte* sourceBase =
+                        (byte*)bitmapData.Scan0
+                            .ToPointer();
+                    int sourceStride =
+                        bitmapData.Stride;
+
+                    for (int y = 0; y < newH; y++)
+                    {
+                        int sourceY =
+                            Math.Min(
+                                bitmap.Height - 1,
+                                (int)(y / _ratio));
+                        byte* sourceRow =
+                            sourceStride >= 0
+                                ? sourceBase +
+                                  sourceY *
+                                  sourceStride
+                                : sourceBase +
+                                  (bitmap.Height -
+                                   1 -
+                                   sourceY) *
+                                  -sourceStride;
+                        int tensorRow =
+                            (y + _padY) *
+                            yoloImgWidth;
+
+                        for (int x = 0;
+                            x < newW;
+                            x++)
+                        {
+                            int sourceX =
+                                Math.Min(
+                                    bitmap.Width - 1,
+                                    (int)(x / _ratio));
+                            int sourceIndex =
+                                sourceX * 3;
+                            int tensorIndex =
+                                tensorRow +
+                                x +
+                                _padX;
+
+                            span[rOffset +
+                                tensorIndex] =
+                                sourceRow[
+                                    sourceIndex +
+                                    2] *
+                                inverse255;
+                            span[gOffset +
+                                tensorIndex] =
+                                sourceRow[
+                                    sourceIndex +
+                                    1] *
+                                inverse255;
+                            span[bOffset +
+                                tensorIndex] =
+                                sourceRow[
+                                    sourceIndex] *
+                                inverse255;
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                bitmap.UnlockBits(bitmapData);
+            }
+        }
+
+        private void RenderDisplayImage(
+            Bitmap copy,
+            List<Detection> boxes,
+            Detection main,
+            double poseInferenceMilliseconds)
+        {
             UpdateGame(main, copy);
 
             using (Graphics g = Graphics.FromImage(copy))
@@ -1958,10 +2178,11 @@ namespace CSharp_YoloOnnx
                 DrawMagicAnimation(g, copy.Width, copy.Height);
                 DrawSimilarityResult(g, copy.Width, copy.Height);
                 DrawAirDrawStatus(g, copy.Width);
-                DrawLiveDiagnostics(g, boxes.Count);
+                DrawLiveDiagnostics(
+                    g,
+                    boxes.Count,
+                    poseInferenceMilliseconds);
             }
-
-            return copy;
         }
 
         private unsafe Bitmap CopyManagedImageToBitmap(
@@ -2036,9 +2257,15 @@ namespace CSharp_YoloOnnx
 
         private void DrawLiveDiagnostics(
             Graphics graphics,
-            int personCount)
+            int personCount,
+            double poseInferenceMilliseconds)
         {
-            string text = "LIVE | YOLO persons: " + personCount;
+            string text =
+                "LIVE | YOLO persons: " +
+                personCount +
+                " | Pose: " +
+                poseInferenceMilliseconds.ToString("0") +
+                " ms";
 
             using (Font font = new Font(
                 "Microsoft JhengHei UI",
