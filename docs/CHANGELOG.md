@@ -1,5 +1,15 @@
 # 版本紀錄
 
+## V1.5 Hybrid Fingertip Tracking Test
+
+- Add a dependency-free short-lived grayscale block-matching tracker for frames between hand-landmark inferences.
+- Seed and recalibrate tracking only from a confirmed index-fingertip landmark.
+- Predict the next local search position from recent velocity and limit the search to 42 pixels.
+- Stop inter-frame tracking after 260 ms without a new landmark confirmation.
+- Keep the stable 67 ms landmark interval and 0.45 drawing confidence threshold.
+- Show `LANDMARK`, `TRACKING`, `HOLD`, or `LOST` in the bottom drawing status.
+- Preserve CUDA/CPU fallback, external WinForms score display, and fixed 640 x 640 YOLO input.
+
 ## WinForms Similarity Score Panel
 
 - Remove the shape-similarity panel from the camera bitmap.
