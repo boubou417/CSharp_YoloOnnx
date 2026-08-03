@@ -1,24 +1,5 @@
 # 版本紀錄
 
-## V1.5 Pinch Stability Fix
-
-- Disable inter-frame fingertip template tracking whenever a pinch is detected or being confirmed.
-- Use landmark index/thumb distance as the authoritative pinch signal.
-- Require a released pinch ratio continuously for 200 ms before cancelling the pinch.
-- Keep an active pinch for up to 300 ms when landmark detection is temporarily missing.
-- Reset all release and missing timers whenever the pinch state is reset.
-- Preserve the bounded hybrid tracker for normal drawing movement.
-
-## V1.5 Hybrid Fingertip Tracking Test
-
-- Add a dependency-free short-lived grayscale block-matching tracker for frames between hand-landmark inferences.
-- Seed and recalibrate tracking only from a confirmed index-fingertip landmark.
-- Predict the next local search position from recent velocity and limit the search to 42 pixels.
-- Stop inter-frame tracking after 260 ms without a new landmark confirmation.
-- Keep the stable 67 ms landmark interval and 0.45 drawing confidence threshold.
-- Show `LANDMARK`, `TRACKING`, `HOLD`, or `LOST` in the bottom drawing status.
-- Preserve CUDA/CPU fallback, external WinForms score display, and fixed 640 x 640 YOLO input.
-
 ## WinForms Similarity Score Panel
 
 - Remove the shape-similarity panel from the camera bitmap.
