@@ -1,5 +1,13 @@
 # 版本紀錄
 
+## WinForms Similarity Score Panel
+
+- Remove the shape-similarity panel from the camera bitmap.
+- Add a fixed 300-pixel-wide score panel at the bottom-left of the WinForms window.
+- Show `形狀相似度：--` before scoring and the numeric score after drawing.
+- Use green, orange, or red score text according to the result.
+- Keep drawing status text in the remaining bottom status area.
+
 ## V1.4 High Speed Tracking Rollback
 
 - Reverted the expanded hand crop, lower hand-presence threshold, 40 ms request interval, dynamic jump allowance, and interpolated points after real-camera testing showed joint misidentification without improving fast-motion capture.
