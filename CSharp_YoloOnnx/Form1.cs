@@ -44,15 +44,11 @@ namespace CSharp_YoloOnnx
         const int FingertipMissingBreakMs = 500;
         const int FingertipMarkerVisibleMs = 400;
         const int FingertipInferenceIntervalMs = 67;
-        const int MotionTrackingMaximumAgeMs = 260;
-        const float MinimumMotionTrackingConfidence = 0.10f;
         const int IdleHandInferenceIntervalMs = 120;
         const int OpenPalmStartDelayMs = 600;
         const int StartGestureMissingGraceMs = 300;
         const int HandTrackingFallbackMs = 300;
         const int PinchPreconfirmMs = 180;
-        const int PinchReleaseConfirmMs = 200;
-        const int PinchMissingGraceMs = 300;
         const int PinchFinishDelayMs = 600;
         const int PinchTailTrimMs = 250;
         const float MinimumPointDistance = 2f;
@@ -77,8 +73,6 @@ namespace CSharp_YoloOnnx
         DateTime rightStartGestureLastSeenAt = DateTime.MinValue;
         DateTime pinchCandidateStartedAt = DateTime.MinValue;
         DateTime pinchStartedAt = DateTime.MinValue;
-        DateTime pinchReleaseCandidateAt = DateTime.MinValue;
-        DateTime pinchMissingSince = DateTime.MinValue;
         string drawingStatusText =
             "左右手皆可｜張開手掌 0.6 秒開始";
         string templateImagePath = string.Empty;
@@ -87,10 +81,6 @@ namespace CSharp_YoloOnnx
         Label lblSimilarityScore;
         Label lblAirDrawStatus;
         FingertipTracker fingertipTracker;
-        readonly FingertipMotionTracker fingertipMotionTracker =
-            new FingertipMotionTracker();
-        DateTime lastLandmarkSeenAt = DateTime.MinValue;
-        string fingertipTrackingMode = "LOST";
         PointF? lastFingertipPoint;
         PointF? displayedFingertipPoint;
         PointF? displayedThumbPoint;
@@ -213,7 +203,7 @@ namespace CSharp_YoloOnnx
         {
             InitializeComponent();
 
-            Text = "CSharp YOLO ONNX V1.5 Hybrid Tracking Test";
+            Text = "CSharp YOLO ONNX V1.3 Stable Tracking";
             panelToolBar.Dock = DockStyle.Top;
             panelToolBar.Height = 40;
             panelStatusBar.Dock = DockStyle.Bottom;
@@ -243,7 +233,7 @@ namespace CSharp_YoloOnnx
             string modelPath = "yolov8n-pose.onnx";
             InitializeYoloSession(modelPath);
             Text =
-                "CSharp YOLO ONNX V1.5 Hybrid Tracking Test | " +
+                "CSharp YOLO ONNX V1.3 Stable Tracking | " +
                 yoloExecutionProvider;
         }
 
@@ -896,10 +886,7 @@ namespace CSharp_YoloOnnx
             drawingFinishedAt = DateTime.MinValue;
             fingertipMissingSince = DateTime.MinValue;
             lastFingertipSeenAt = DateTime.MinValue;
-            lastLandmarkSeenAt = DateTime.MinValue;
             lastFingertipInferenceAt = DateTime.MinValue;
-            fingertipMotionTracker.Reset();
-            fingertipTrackingMode = "LANDMARK";
             lastFingertipPoint = null;
             displayedFingertipPoint = null;
             displayedThumbPoint = null;
@@ -1122,10 +1109,7 @@ namespace CSharp_YoloOnnx
                     displayedFingertipPresence = 0f;
                     fingertipMissingSince = DateTime.MinValue;
                     lastFingertipSeenAt = DateTime.MinValue;
-                    lastLandmarkSeenAt = DateTime.MinValue;
                     lastFingertipInferenceAt = DateTime.MinValue;
-                    fingertipMotionTracker.Reset();
-                    fingertipTrackingMode = "LOST";
                     lastIdleHandInferenceAt = DateTime.MinValue;
                     drawingStrokeStartPending = true;
                     ResetPinchGesture(false);
@@ -1242,21 +1226,18 @@ namespace CSharp_YoloOnnx
                                 "繪圖中（" +
                                 GetHandDisplayName(
                                     activeDrawingHand) +
-                                "食指）｜" +
-                                fingertipTrackingMode +
-                                "｜再次捏合 0.6 秒完成";
+                                "食指）｜再次捏合 0.6 秒完成";
                         }
                     }
                     else
                     {
                         ResetPinchGesture(true);
                         MarkFingertipMissing();
-                        fingertipTrackingMode = "LOST";
                         drawingStatusText =
                             "正在尋找" +
                             GetHandDisplayName(
                                 activeDrawingHand) +
-                            "食指｜LOST｜整隻手與手肘請保持在畫面內";
+                            "食指｜整隻手與手肘請保持在畫面內";
                     }
 
                     break;
@@ -1659,20 +1640,11 @@ namespace CSharp_YoloOnnx
                 (now - lastFingertipInferenceAt).TotalMilliseconds <
                     FingertipInferenceIntervalMs)
             {
-                if (TryTrackFingertipBetweenLandmarks(
-                    frame,
-                    now,
-                    out fingertip))
-                {
-                    return true;
-                }
-
                 if (lastFingertipPoint.HasValue &&
                     lastFingertipSeenAt != DateTime.MinValue &&
                     (now - lastFingertipSeenAt).TotalMilliseconds <
                         FingertipMarkerVisibleMs)
                 {
-                    fingertipTrackingMode = "HOLD";
                     fingertip = lastFingertipPoint.Value;
                     return true;
                 }
@@ -1690,10 +1662,7 @@ namespace CSharp_YoloOnnx
                 hand,
                 out result))
             {
-                return TryTrackFingertipBetweenLandmarks(
-                    frame,
-                    now,
-                    out fingertip);
+                return false;
             }
 
             PointF detected = result.IndexTip;
@@ -1764,69 +1733,14 @@ namespace CSharp_YoloOnnx
             SetDisplayedHandResult(hand, result);
             displayedFingertipPoint = detected;
             lastFingertipSeenAt = now;
-            lastLandmarkSeenAt = now;
-            fingertipMotionTracker.Reset(
-                frame,
-                detected);
-            fingertipTrackingMode = "LANDMARK";
             fingertipMissingSince = DateTime.MinValue;
             fingertip = detected;
 
             return true;
         }
 
-        private bool TryTrackFingertipBetweenLandmarks(
-            Bitmap frame,
-            DateTime now,
-            out PointF fingertip)
-        {
-            fingertip = PointF.Empty;
-
-            if (frame == null ||
-                IsPinchDetectionActive() ||
-                latestPinchRatio <= PinchReleaseRatio ||
-                lastLandmarkSeenAt == DateTime.MinValue ||
-                (now - lastLandmarkSeenAt)
-                    .TotalMilliseconds >
-                    MotionTrackingMaximumAgeMs)
-            {
-                fingertipMotionTracker.Reset();
-                return false;
-            }
-
-            PointF tracked;
-            float confidence;
-
-            if (!fingertipMotionTracker.TryTrack(
-                frame,
-                out tracked,
-                out confidence) ||
-                confidence <
-                    MinimumMotionTrackingConfidence)
-            {
-                return false;
-            }
-
-            lastFingertipPoint = tracked;
-            displayedFingertipPoint = tracked;
-            lastFingertipSeenAt = now;
-            fingertipMissingSince = DateTime.MinValue;
-            fingertipTrackingMode = "TRACKING";
-            fingertip = tracked;
-            return true;
-        }
-
         private bool UpdatePinchGesture(DateTime now)
         {
-            if (string.Equals(
-                fingertipTrackingMode,
-                "LANDMARK",
-                StringComparison.Ordinal))
-            {
-                pinchMissingSince =
-                    DateTime.MinValue;
-            }
-
             if (!pinchInProgress)
             {
                 if (pinchCandidateStartedAt == DateTime.MinValue)
@@ -1835,73 +1749,36 @@ namespace CSharp_YoloOnnx
                         return false;
 
                     pinchCandidateStartedAt = now;
-                    pinchReleaseCandidateAt =
-                        DateTime.MinValue;
-                    fingertipMotionTracker.Reset();
-                    fingertipTrackingMode = "PINCH";
                     drawingStrokeStartPending = true;
                     return false;
                 }
 
                 if (latestPinchRatio >= PinchReleaseRatio)
                 {
-                    if (IsPinchReleaseConfirmed(now))
-                        ResetPinchGesture(true);
-
+                    ResetPinchGesture(true);
                     return false;
                 }
 
-                pinchReleaseCandidateAt =
-                    DateTime.MinValue;
-
                 if ((now - pinchCandidateStartedAt)
-                        .TotalMilliseconds <
-                    PinchPreconfirmMs)
+                        .TotalMilliseconds < PinchPreconfirmMs)
                 {
                     return false;
                 }
 
                 pinchInProgress = true;
-                pinchStartedAt =
-                    pinchCandidateStartedAt;
-                pinchCandidateStartedAt =
-                    DateTime.MinValue;
+                pinchStartedAt = pinchCandidateStartedAt;
+                pinchCandidateStartedAt = DateTime.MinValue;
                 drawingStrokeStartPending = true;
             }
-            else if (latestPinchRatio >=
-                PinchReleaseRatio)
+            else if (latestPinchRatio >= PinchReleaseRatio)
             {
-                if (IsPinchReleaseConfirmed(now))
-                    ResetPinchGesture(true);
-
+                ResetPinchGesture(true);
                 return false;
-            }
-            else
-            {
-                pinchReleaseCandidateAt =
-                    DateTime.MinValue;
             }
 
             return
-                (now - pinchStartedAt)
-                    .TotalMilliseconds >=
+                (now - pinchStartedAt).TotalMilliseconds >=
                 PinchFinishDelayMs;
-        }
-
-        private bool IsPinchReleaseConfirmed(
-            DateTime now)
-        {
-            if (pinchReleaseCandidateAt ==
-                DateTime.MinValue)
-            {
-                pinchReleaseCandidateAt = now;
-                return false;
-            }
-
-            return
-                (now - pinchReleaseCandidateAt)
-                    .TotalMilliseconds >=
-                PinchReleaseConfirmMs;
         }
 
         private int GetPinchProgressPercent(DateTime now)
@@ -1930,8 +1807,6 @@ namespace CSharp_YoloOnnx
             pinchInProgress = false;
             pinchCandidateStartedAt = DateTime.MinValue;
             pinchStartedAt = DateTime.MinValue;
-            pinchReleaseCandidateAt = DateTime.MinValue;
-            pinchMissingSince = DateTime.MinValue;
             latestPinchRatio = float.MaxValue;
 
             if (startNewStroke && wasPinching)
@@ -1977,35 +1852,8 @@ namespace CSharp_YoloOnnx
             if (gameState != GameState.Drawing)
                 return;
 
+            ResetPinchGesture(true);
             DateTime now = DateTime.Now;
-
-            if (IsPinchDetectionActive())
-            {
-                if (pinchMissingSince ==
-                    DateTime.MinValue)
-                {
-                    pinchMissingSince = now;
-                }
-                else if ((now - pinchMissingSince)
-                        .TotalMilliseconds >=
-                    PinchMissingGraceMs)
-                {
-                    ResetPinchGesture(true);
-                }
-            }
-            else
-            {
-                ResetPinchGesture(true);
-            }
-
-            if (lastLandmarkSeenAt == DateTime.MinValue ||
-                (now - lastLandmarkSeenAt)
-                    .TotalMilliseconds >
-                    MotionTrackingMaximumAgeMs)
-            {
-                fingertipMotionTracker.Reset();
-                fingertipTrackingMode = "LOST";
-            }
 
             if (fingertipMissingSince == DateTime.MinValue)
                 fingertipMissingSince = now;
