@@ -43,11 +43,12 @@ namespace CSharp_YoloOnnx
         const int MinimumDrawingPoints = 12;
         const int FinishedDisplayMs = 2500;
         const int StopGestureTailTrimMs = 350;
-        const int FingertipMissingBreakMs = 300;
-        const int FingertipMarkerVisibleMs = 200;
+        const int FingertipMissingBreakMs = 500;
+        const int FingertipMarkerVisibleMs = 400;
         const int FingertipInferenceIntervalMs = 67;
         const int IdleHandInferenceIntervalMs = 120;
-        const int PinchStartDelayMs = 600;
+        const int OpenPalmStartDelayMs = 600;
+        const int StartGestureMissingGraceMs = 300;
         const int PinchFinishDelayMs = 600;
         const int PinchTailTrimMs = 250;
         const float MinimumPointDistance = 2f;
@@ -55,17 +56,22 @@ namespace CSharp_YoloOnnx
         const float FingertipSmoothingFactor = 0.70f;
         const float PinchStartRatio = 0.32f;
         const float PinchReleaseRatio = 0.42f;
+        const float OpenPalmStartScore = 0.75f;
+        const float OpenPalmReleaseScore = 0.50f;
+        const float MinimumPoseHandKeypointScore = 0.35f;
 
         DateTime drawingFinishedAt = DateTime.MinValue;
         DateTime fingertipMissingSince = DateTime.MinValue;
         DateTime lastFingertipSeenAt = DateTime.MinValue;
         DateTime lastFingertipInferenceAt = DateTime.MinValue;
         DateTime lastIdleHandInferenceAt = DateTime.MinValue;
-        DateTime leftStartPinchAt = DateTime.MinValue;
-        DateTime rightStartPinchAt = DateTime.MinValue;
+        DateTime leftStartGestureAt = DateTime.MinValue;
+        DateTime rightStartGestureAt = DateTime.MinValue;
+        DateTime leftStartGestureLastSeenAt = DateTime.MinValue;
+        DateTime rightStartGestureLastSeenAt = DateTime.MinValue;
         DateTime pinchStartedAt = DateTime.MinValue;
         string drawingStatusText =
-            "左右手皆可｜食指與拇指捏合 0.6 秒開始";
+            "左右手皆可｜張開手掌 0.6 秒開始";
         string templateImagePath = string.Empty;
         double? lastDrawingScore;
         Button btnSelectTemplate;
@@ -75,9 +81,10 @@ namespace CSharp_YoloOnnx
         PointF? displayedThumbPoint;
         float displayedFingertipPresence;
         float latestPinchRatio = float.MaxValue;
+        float latestOpenPalmScore;
         bool drawingStrokeStartPending = true;
         bool pinchInProgress;
-        bool waitingForPinchReleaseAfterStart;
+        bool waitingForOpenPalmReleaseAfterStart;
         DrawingHand activeDrawingHand = DrawingHand.None;
         DrawingHand displayedDrawingHand = DrawingHand.None;
         Bitmap pendingDisplayImage;
@@ -228,7 +235,7 @@ namespace CSharp_YoloOnnx
             drawingStatusText =
                 "比對圖：" +
                 Path.GetFileName(templateImagePath) +
-                "｜左右手捏合開始";
+                "｜左右手張掌開始";
         }
 
         private void btnSelectTemplate_Click(object sender, EventArgs e)
@@ -247,7 +254,7 @@ namespace CSharp_YoloOnnx
                 drawingStatusText =
                     "比對圖：" +
                     Path.GetFileName(templateImagePath) +
-                    "｜左右手捏合開始";
+                    "｜左右手張掌開始";
             }
         }
 
@@ -464,12 +471,12 @@ namespace CSharp_YoloOnnx
             displayedThumbPoint = null;
             displayedFingertipPresence = 0f;
             ResetPinchGesture(false);
-            ResetStartPinchGestures();
+            ResetStartGestures();
             drawingStrokeStartPending = true;
             lastDrawingScore = null;
             activeDrawingHand = hand;
             displayedDrawingHand = hand;
-            waitingForPinchReleaseAfterStart = true;
+            waitingForOpenPalmReleaseAfterStart = true;
 
             if (startResult != null)
             {
@@ -481,13 +488,15 @@ namespace CSharp_YoloOnnx
                     startResult.HandPresence;
                 latestPinchRatio =
                     startResult.PinchRatio;
+                latestOpenPalmScore =
+                    startResult.OpenPalmScore;
                 lastFingertipSeenAt = DateTime.Now;
             }
 
             gameState = GameState.Drawing;
             drawingStatusText =
                 GetHandDisplayName(hand) +
-                "開始成功｜請先放開捏合";
+                "開始成功｜請收起其他手指並用食指畫圖";
 
             Debug.WriteLine("===== Start Drawing =====");
         }
@@ -501,7 +510,7 @@ namespace CSharp_YoloOnnx
 
             TrimGestureTail(gestureStartedAt, tailTrimMs);
             ResetPinchGesture(false);
-            waitingForPinchReleaseAfterStart = false;
+            waitingForOpenPalmReleaseAfterStart = false;
             rightHandHistory.Clear();
             isWaving = false;
             handRaisedStart = DateTime.MinValue;
@@ -517,7 +526,7 @@ namespace CSharp_YoloOnnx
             if (drawingPoints.Count < MinimumDrawingPoints)
             {
                 drawingStatusText =
-                    "軌跡太短，未儲存｜請重新捏合開始";
+                    "軌跡太短，未儲存｜請重新張掌開始";
                 drawingFinishedAt = DateTime.Now;
                 gameState = GameState.Finished;
                 return;
@@ -679,17 +688,17 @@ namespace CSharp_YoloOnnx
                     lastIdleHandInferenceAt = DateTime.MinValue;
                     drawingStrokeStartPending = true;
                     ResetPinchGesture(false);
-                    ResetStartPinchGestures();
+                    ResetStartGestures();
                     activeDrawingHand = DrawingHand.None;
                     displayedDrawingHand = DrawingHand.None;
-                    waitingForPinchReleaseAfterStart = false;
+                    waitingForOpenPalmReleaseAfterStart = false;
                     isWaving = false;
                     drawingStatusText =
                         string.IsNullOrWhiteSpace(templateImagePath)
                             ? GetIdleInstruction()
                             : "比對圖：" +
                               Path.GetFileName(templateImagePath) +
-                              "｜左右手捏合開始";
+                              "｜左右手張掌開始";
                 }
 
                 return;
@@ -705,7 +714,7 @@ namespace CSharp_YoloOnnx
 
                 if (gameState == GameState.Idle)
                 {
-                    ResetStartPinchGestures();
+                    ResetStartGestures();
                     ClearDisplayedHand();
                     drawingStatusText = GetIdleInstruction();
                 }
@@ -752,12 +761,12 @@ namespace CSharp_YoloOnnx
                             activeDrawingHand,
                             out fingertip))
                         {
-                            if (waitingForPinchReleaseAfterStart)
+                            if (waitingForOpenPalmReleaseAfterStart)
                             {
-                                if (latestPinchRatio >=
-                                    PinchReleaseRatio)
+                                if (latestOpenPalmScore <=
+                                    OpenPalmReleaseScore)
                                 {
-                                    waitingForPinchReleaseAfterStart =
+                                    waitingForOpenPalmReleaseAfterStart =
                                         false;
                                     ResetPinchGesture(false);
                                     drawingStrokeStartPending = true;
@@ -765,14 +774,14 @@ namespace CSharp_YoloOnnx
                                     drawingStatusText =
                                         GetHandDisplayName(
                                             activeDrawingHand) +
-                                        "已放開｜開始用食指畫圖";
+                                        "已進入繪圖｜用食指畫圖";
                                 }
                                 else
                                 {
                                     drawingStatusText =
                                         GetHandDisplayName(
                                             activeDrawingHand) +
-                                        "開始成功｜請先放開捏合";
+                                        "開始成功｜請收起其他手指";
                                 }
                             }
                             else if (UpdatePinchGesture(DateTime.Now))
@@ -870,11 +879,11 @@ namespace CSharp_YoloOnnx
                 DrawingHand.Right,
                 out rightResult);
 
-            bool leftConfirmed = UpdateStartPinchCandidate(
+            bool leftConfirmed = UpdateStartGestureCandidate(
                 DrawingHand.Left,
                 leftDetected ? leftResult : null,
                 now);
-            bool rightConfirmed = UpdateStartPinchCandidate(
+            bool rightConfirmed = UpdateStartGestureCandidate(
                 DrawingHand.Right,
                 rightDetected ? rightResult : null,
                 now);
@@ -894,13 +903,13 @@ namespace CSharp_YoloOnnx
             FingertipResult displayResult = null;
             DrawingHand displayHand = DrawingHand.None;
 
-            if (leftStartPinchAt != DateTime.MinValue &&
+            if (leftStartGestureAt != DateTime.MinValue &&
                 leftDetected)
             {
                 displayResult = leftResult;
                 displayHand = DrawingHand.Left;
             }
-            else if (rightStartPinchAt != DateTime.MinValue &&
+            else if (rightStartGestureAt != DateTime.MinValue &&
                 rightDetected)
             {
                 displayResult = rightResult;
@@ -925,17 +934,17 @@ namespace CSharp_YoloOnnx
             else
                 ClearDisplayedHand();
 
-            DateTime activeStart = GetStartPinchAt(displayHand);
+            DateTime activeStart = GetStartGestureAt(displayHand);
 
             if (activeStart != DateTime.MinValue)
             {
                 int progress = GetProgressPercent(
                     activeStart,
-                    PinchStartDelayMs,
+                    OpenPalmStartDelayMs,
                     now);
                 drawingStatusText =
                     GetHandDisplayName(displayHand) +
-                    "捏合開始 " +
+                    "張掌開始 " +
                     progress +
                     "%";
             }
@@ -945,63 +954,101 @@ namespace CSharp_YoloOnnx
             }
         }
 
-        private bool UpdateStartPinchCandidate(
+        private bool UpdateStartGestureCandidate(
             DrawingHand hand,
             FingertipResult result,
             DateTime now)
         {
-            DateTime startedAt = GetStartPinchAt(hand);
+            DateTime startedAt = GetStartGestureAt(hand);
 
             if (result == null)
             {
-                SetStartPinchAt(hand, DateTime.MinValue);
+                DateTime lastSeenAt =
+                    GetStartGestureLastSeenAt(hand);
+
+                if (lastSeenAt == DateTime.MinValue ||
+                    (now - lastSeenAt).TotalMilliseconds >
+                        StartGestureMissingGraceMs)
+                {
+                    SetStartGestureAt(hand, DateTime.MinValue);
+                    SetStartGestureLastSeenAt(
+                        hand,
+                        DateTime.MinValue);
+                }
+
                 return false;
             }
 
-            if (result.PinchRatio <= PinchStartRatio)
+            SetStartGestureLastSeenAt(hand, now);
+
+            if (result.OpenPalmScore >= OpenPalmStartScore)
             {
                 if (startedAt == DateTime.MinValue)
                 {
                     startedAt = now;
-                    SetStartPinchAt(hand, startedAt);
+                    SetStartGestureAt(hand, startedAt);
                 }
 
                 return
                     (now - startedAt).TotalMilliseconds >=
-                    PinchStartDelayMs;
+                    OpenPalmStartDelayMs;
             }
 
-            if (result.PinchRatio >= PinchReleaseRatio)
-                SetStartPinchAt(hand, DateTime.MinValue);
+            if (result.OpenPalmScore <= OpenPalmReleaseScore)
+                SetStartGestureAt(hand, DateTime.MinValue);
 
             return false;
         }
 
-        private void ResetStartPinchGestures()
+        private void ResetStartGestures()
         {
-            leftStartPinchAt = DateTime.MinValue;
-            rightStartPinchAt = DateTime.MinValue;
+            leftStartGestureAt = DateTime.MinValue;
+            rightStartGestureAt = DateTime.MinValue;
+            leftStartGestureLastSeenAt = DateTime.MinValue;
+            rightStartGestureLastSeenAt = DateTime.MinValue;
         }
 
-        private DateTime GetStartPinchAt(DrawingHand hand)
+        private DateTime GetStartGestureAt(DrawingHand hand)
         {
             if (hand == DrawingHand.Left)
-                return leftStartPinchAt;
+                return leftStartGestureAt;
 
             if (hand == DrawingHand.Right)
-                return rightStartPinchAt;
+                return rightStartGestureAt;
 
             return DateTime.MinValue;
         }
 
-        private void SetStartPinchAt(
+        private void SetStartGestureAt(
             DrawingHand hand,
             DateTime value)
         {
             if (hand == DrawingHand.Left)
-                leftStartPinchAt = value;
+                leftStartGestureAt = value;
             else if (hand == DrawingHand.Right)
-                rightStartPinchAt = value;
+                rightStartGestureAt = value;
+        }
+
+        private DateTime GetStartGestureLastSeenAt(
+            DrawingHand hand)
+        {
+            if (hand == DrawingHand.Left)
+                return leftStartGestureLastSeenAt;
+
+            if (hand == DrawingHand.Right)
+                return rightStartGestureLastSeenAt;
+
+            return DateTime.MinValue;
+        }
+
+        private void SetStartGestureLastSeenAt(
+            DrawingHand hand,
+            DateTime value)
+        {
+            if (hand == DrawingHand.Left)
+                leftStartGestureLastSeenAt = value;
+            else if (hand == DrawingHand.Right)
+                rightStartGestureLastSeenAt = value;
         }
 
         private int GetProgressPercent(
@@ -1023,7 +1070,7 @@ namespace CSharp_YoloOnnx
 
         private string GetIdleInstruction()
         {
-            return "左右手皆可｜食指與拇指捏合 0.6 秒開始";
+            return "左右手皆可｜張開手掌 0.6 秒開始";
         }
 
         private string GetHandDisplayName(DrawingHand hand)
@@ -1046,6 +1093,7 @@ namespace CSharp_YoloOnnx
             displayedThumbPoint = result.ThumbTip;
             displayedFingertipPresence = result.HandPresence;
             latestPinchRatio = result.PinchRatio;
+            latestOpenPalmScore = result.OpenPalmScore;
             lastFingertipSeenAt = DateTime.Now;
         }
 
@@ -1056,6 +1104,7 @@ namespace CSharp_YoloOnnx
             displayedThumbPoint = null;
             displayedFingertipPresence = 0f;
             latestPinchRatio = float.MaxValue;
+            latestOpenPalmScore = 0f;
         }
 
         private bool TryDetectHand(
@@ -1084,8 +1133,8 @@ namespace CSharp_YoloOnnx
             Keypoint wristKeypoint =
                 person.Keypoints[wristIndex];
 
-            if (elbowKeypoint.Score < 0.5f ||
-                wristKeypoint.Score < 0.5f)
+            if (elbowKeypoint.Score < MinimumPoseHandKeypointScore ||
+                wristKeypoint.Score < MinimumPoseHandKeypointScore)
             {
                 return false;
             }
@@ -1786,14 +1835,19 @@ namespace CSharp_YoloOnnx
             }
 
             PointF point = displayedFingertipPoint.Value;
-            float pinchProgress;
-            bool showPinchProgress =
-                TryGetDisplayedPinchProgress(out pinchProgress);
+            float gestureProgress;
+            bool pinchGesture;
+            bool showGestureProgress =
+                TryGetDisplayedGestureProgress(
+                    out gestureProgress,
+                    out pinchGesture);
 
             using (Pen outline = new Pen(Color.Cyan, 3f))
             using (Pen thumbOutline = new Pen(Color.Magenta, 3f))
             using (Pen pinchLine = new Pen(Color.Orange, 2f))
-            using (Pen progressPen = new Pen(Color.Orange, 4f))
+            using (Pen progressPen = new Pen(
+                pinchGesture ? Color.Orange : Color.Lime,
+                4f))
             using (Brush center = new SolidBrush(Color.White))
             using (Font font = new Font(
                 "Microsoft JhengHei UI",
@@ -1833,22 +1887,25 @@ namespace CSharp_YoloOnnx
                         14f,
                         14f);
 
-                    if (showPinchProgress)
+                    if (showGestureProgress && pinchGesture)
                     {
                         graphics.DrawLine(
                             pinchLine,
                             thumb,
                             point);
-
-                        graphics.DrawArc(
-                            progressPen,
-                            point.X - 14f,
-                            point.Y - 14f,
-                            28f,
-                            28f,
-                            -90f,
-                            360f * pinchProgress);
                     }
+                }
+
+                if (showGestureProgress)
+                {
+                    graphics.DrawArc(
+                        progressPen,
+                        point.X - 14f,
+                        point.Y - 14f,
+                        28f,
+                        28f,
+                        -90f,
+                        360f * gestureProgress);
                 }
 
                 if (latestPinchRatio < float.MaxValue)
@@ -1857,7 +1914,7 @@ namespace CSharp_YoloOnnx
                         "捏合 " +
                         latestPinchRatio.ToString("0.00"),
                         font,
-                        showPinchProgress
+                        showGestureProgress && pinchGesture
                             ? Brushes.Orange
                             : Brushes.Magenta,
                         point.X + 12f,
@@ -1866,32 +1923,35 @@ namespace CSharp_YoloOnnx
             }
         }
 
-        private bool TryGetDisplayedPinchProgress(
-            out float progress)
+        private bool TryGetDisplayedGestureProgress(
+            out float progress,
+            out bool pinchGesture)
         {
             DateTime now = DateTime.Now;
 
             if (gameState == GameState.Idle)
             {
                 DateTime start =
-                    GetStartPinchAt(displayedDrawingHand);
+                    GetStartGestureAt(displayedDrawingHand);
 
                 if (start != DateTime.MinValue)
                 {
                     progress =
                         GetProgressPercent(
                             start,
-                            PinchStartDelayMs,
+                            OpenPalmStartDelayMs,
                             now) /
                         100f;
+                    pinchGesture = false;
                     return true;
                 }
             }
             else if (gameState == GameState.Drawing)
             {
-                if (waitingForPinchReleaseAfterStart)
+                if (waitingForOpenPalmReleaseAfterStart)
                 {
                     progress = 1f;
+                    pinchGesture = false;
                     return true;
                 }
 
@@ -1900,11 +1960,13 @@ namespace CSharp_YoloOnnx
                     progress =
                         GetPinchProgressPercent(now) /
                         100f;
+                    pinchGesture = true;
                     return true;
                 }
             }
 
             progress = 0f;
+            pinchGesture = false;
             return false;
         }
 

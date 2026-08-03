@@ -13,13 +13,14 @@ namespace CSharp_YoloOnnx
         public PointF IndexTip { get; set; }
         public PointF ThumbTip { get; set; }
         public float PinchRatio { get; set; }
+        public float OpenPalmScore { get; set; }
         public float HandPresence { get; set; }
         public RectangleF SearchRegion { get; set; }
     }
 
     /// <summary>
-    /// Runs the MediaPipe hand-landmark model on a pose-guided crop around the
-    /// right wrist. YOLO supplies the wrist and elbow, so a separate palm
+    /// Runs the MediaPipe hand-landmark model on a pose-guided crop around a
+    /// wrist. YOLO supplies the wrist and elbow, so a separate palm
     /// detector is not required for this drawing workflow.
     /// </summary>
     public sealed class FingertipTracker : IDisposable
@@ -29,10 +30,18 @@ namespace CSharp_YoloOnnx
         private const int WristLandmarkIndex = 0;
         private const int ThumbTipLandmarkIndex = 4;
         private const int IndexMcpLandmarkIndex = 5;
+        private const int IndexPipLandmarkIndex = 6;
         private const int IndexTipLandmarkIndex = 8;
         private const int MiddleMcpLandmarkIndex = 9;
+        private const int MiddlePipLandmarkIndex = 10;
+        private const int MiddleTipLandmarkIndex = 12;
+        private const int RingPipLandmarkIndex = 14;
+        private const int RingTipLandmarkIndex = 16;
         private const int PinkyMcpLandmarkIndex = 17;
-        private const float MinimumHandPresence = 0.55f;
+        private const int PinkyPipLandmarkIndex = 18;
+        private const int PinkyTipLandmarkIndex = 20;
+        private const float MinimumHandPresence = 0.35f;
+        private const float ExtendedFingerDistanceRatio = 1.12f;
         private const float CropSizeFromForearm = 1.8f;
         private const float CropCenterFromWrist = 0.35f;
         private const float MaximumWristMismatchRatio = 0.35f;
@@ -158,6 +167,46 @@ namespace CSharp_YoloOnnx
                 float pinchRatio =
                     Distance(modelThumbTip, modelIndexTip) /
                     handScale;
+                int extendedFingerCount = 0;
+
+                if (IsFingerExtended(
+                    landmarks,
+                    modelWrist,
+                    IndexPipLandmarkIndex,
+                    IndexTipLandmarkIndex))
+                {
+                    extendedFingerCount++;
+                }
+
+                if (IsFingerExtended(
+                    landmarks,
+                    modelWrist,
+                    MiddlePipLandmarkIndex,
+                    MiddleTipLandmarkIndex))
+                {
+                    extendedFingerCount++;
+                }
+
+                if (IsFingerExtended(
+                    landmarks,
+                    modelWrist,
+                    RingPipLandmarkIndex,
+                    RingTipLandmarkIndex))
+                {
+                    extendedFingerCount++;
+                }
+
+                if (IsFingerExtended(
+                    landmarks,
+                    modelWrist,
+                    PinkyPipLandmarkIndex,
+                    PinkyTipLandmarkIndex))
+                {
+                    extendedFingerCount++;
+                }
+
+                float openPalmScore =
+                    extendedFingerCount / 4f;
                 PointF indexTip = transform.MapToFrame(modelIndexTip);
                 PointF thumbTip = transform.MapToFrame(modelThumbTip);
 
@@ -178,12 +227,27 @@ namespace CSharp_YoloOnnx
                     IndexTip = indexTip,
                     ThumbTip = thumbTip,
                     PinchRatio = pinchRatio,
+                    OpenPalmScore = openPalmScore,
                     HandPresence = handPresence,
                     SearchRegion = transform.AxisAlignedBounds
                 };
 
                 return true;
             }
+        }
+
+        private static bool IsFingerExtended(
+            float[] landmarks,
+            PointF wrist,
+            int pipIndex,
+            int tipIndex)
+        {
+            PointF pip = ReadLandmark(landmarks, pipIndex);
+            PointF tip = ReadLandmark(landmarks, tipIndex);
+
+            return Distance(wrist, tip) >=
+                Distance(wrist, pip) *
+                ExtendedFingerDistanceRatio;
         }
 
         private static void ValidateInputTensor(Tensor tensor)
