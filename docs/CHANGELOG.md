@@ -1,5 +1,12 @@
 # 版本紀錄
 
+## V1.4 High Speed Tracking Rollback
+
+- Reverted the expanded hand crop, lower hand-presence threshold, 40 ms request interval, dynamic jump allowance, and interpolated points after real-camera testing showed joint misidentification without improving fast-motion capture.
+- Restored the stable 67 ms interval, 0.45 drawing confidence, original crop, and original jump rejection.
+- Preserved CUDA-first/CPU-fallback selection and the independent display/pose threads.
+- Fast motion will be addressed with a true inter-frame tracker or palm detector instead of relaxed landmark heuristics.
+
 ## V1.4 High Speed Tracking Test
 
 - Increase fingertip inference from about 15 FPS (67 ms) to a maximum of about 25 FPS (40 ms) while drawing.
