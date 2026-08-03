@@ -24,9 +24,7 @@ namespace CSharp_YoloOnnx
         bool threadComplete = false;
         // ===== Gesture Timer =====
         DateTime handRaisedStart = DateTime.MinValue;
-        DateTime handOnChestStart = DateTime.MinValue;
         const int RaiseHandDelayMs = 800;
-        const int HandOnChestDelayMs = 800;
 
         // ===== 揮手偵測 =====
         Queue<float> rightHandHistory = new Queue<float>();
@@ -42,7 +40,6 @@ namespace CSharp_YoloOnnx
 
         const int MinimumDrawingPoints = 12;
         const int FinishedDisplayMs = 2500;
-        const int StopGestureTailTrimMs = 350;
         const int FingertipMissingBreakMs = 500;
         const int FingertipMarkerVisibleMs = 400;
         const int FingertipInferenceIntervalMs = 67;
@@ -461,7 +458,6 @@ namespace CSharp_YoloOnnx
             rightHandHistory.Clear();
             isWaving = false;
             handRaisedStart = DateTime.MinValue;
-            handOnChestStart = DateTime.MinValue;
             drawingFinishedAt = DateTime.MinValue;
             fingertipMissingSince = DateTime.MinValue;
             lastFingertipSeenAt = DateTime.MinValue;
@@ -514,7 +510,6 @@ namespace CSharp_YoloOnnx
             rightHandHistory.Clear();
             isWaving = false;
             handRaisedStart = DateTime.MinValue;
-            handOnChestStart = DateTime.MinValue;
             displayedFingertipPoint = null;
             displayedThumbPoint = null;
             displayedDrawingHand = DrawingHand.None;
@@ -710,7 +705,6 @@ namespace CSharp_YoloOnnx
             if (main == null || main.Keypoints.Count <= 10 || _ratio <= 0f)
             {
                 handRaisedStart = DateTime.MinValue;
-                handOnChestStart = DateTime.MinValue;
 
                 if (gameState == GameState.Idle)
                 {
@@ -745,96 +739,75 @@ namespace CSharp_YoloOnnx
                     break;
 
                 case GameState.Drawing:
-                    bool rawHandOnChest = IsHandOnChest(
+                    PointF fingertip;
+
+                    if (TryGetFingertipPoint(
+                        frame,
                         main,
-                        activeDrawingHand);
-                    bool handOnChest =
-                        IsHandOnChestConfirmed(rawHandOnChest);
-
-                    if (!rawHandOnChest)
+                        activeDrawingHand,
+                        out fingertip))
                     {
-                        PointF fingertip;
-
-                        if (TryGetFingertipPoint(
-                            frame,
-                            main,
-                            activeDrawingHand,
-                            out fingertip))
+                        if (waitingForOpenPalmReleaseAfterStart)
                         {
-                            if (waitingForOpenPalmReleaseAfterStart)
+                            if (latestOpenPalmScore <=
+                                OpenPalmReleaseScore)
                             {
-                                if (latestOpenPalmScore <=
-                                    OpenPalmReleaseScore)
-                                {
-                                    waitingForOpenPalmReleaseAfterStart =
-                                        false;
-                                    ResetPinchGesture(false);
-                                    drawingStrokeStartPending = true;
-                                    lastFingertipPoint = null;
-                                    drawingStatusText =
-                                        GetHandDisplayName(
-                                            activeDrawingHand) +
-                                        "已進入繪圖｜用食指畫圖";
-                                }
-                                else
-                                {
-                                    drawingStatusText =
-                                        GetHandDisplayName(
-                                            activeDrawingHand) +
-                                        "開始成功｜請收起其他手指";
-                                }
-                            }
-                            else if (UpdatePinchGesture(DateTime.Now))
-                            {
-                                DateTime pinchDetectedAt =
-                                    pinchStartedAt;
-                                StopDrawing(
-                                    pinchDetectedAt,
-                                    PinchTailTrimMs);
-                                break;
-                            }
-                            else if (pinchInProgress)
-                            {
-                                int progress =
-                                    GetPinchProgressPercent(
-                                        DateTime.Now);
+                                waitingForOpenPalmReleaseAfterStart =
+                                    false;
+                                ResetPinchGesture(false);
+                                drawingStrokeStartPending = true;
+                                lastFingertipPoint = null;
                                 drawingStatusText =
-                                    "捏合完成 " +
-                                    progress +
-                                    "%｜放開可取消";
+                                    GetHandDisplayName(
+                                        activeDrawingHand) +
+                                    "已進入繪圖｜用食指畫圖";
                             }
                             else
                             {
-                                AddDrawingPoint(fingertip);
                                 drawingStatusText =
-                                    "繪圖中（" +
                                     GetHandDisplayName(
                                         activeDrawingHand) +
-                                    "食指）｜再次捏合 0.6 秒完成";
+                                    "開始成功｜請收起其他手指";
                             }
+                        }
+                        else if (UpdatePinchGesture(DateTime.Now))
+                        {
+                            DateTime pinchDetectedAt =
+                                pinchStartedAt;
+                            StopDrawing(
+                                pinchDetectedAt,
+                                PinchTailTrimMs);
+                            break;
+                        }
+                        else if (pinchInProgress)
+                        {
+                            int progress =
+                                GetPinchProgressPercent(
+                                    DateTime.Now);
+                            drawingStatusText =
+                                "捏合完成 " +
+                                progress +
+                                "%｜放開可取消";
                         }
                         else
                         {
-                            ResetPinchGesture(true);
-                            MarkFingertipMissing();
+                            AddDrawingPoint(fingertip);
                             drawingStatusText =
-                                "正在尋找" +
+                                "繪圖中（" +
                                 GetHandDisplayName(
                                     activeDrawingHand) +
-                                "食指｜請讓手腕與手肘留在畫面";
+                                "食指）｜再次捏合 0.6 秒完成";
                         }
                     }
                     else
                     {
                         ResetPinchGesture(true);
                         MarkFingertipMissing();
-                    }
-
-                    if (handOnChest)
-                    {
-                        StopDrawing(
-                            handOnChestStart,
-                            StopGestureTailTrimMs);
+                        drawingStatusText =
+                            "正在尋找" +
+                            GetHandDisplayName(
+                                activeDrawingHand) +
+                            "食指｜整隻手與手肘請保持在畫面內";
                     }
 
                     break;
@@ -2095,64 +2068,6 @@ namespace CSharp_YoloOnnx
             return wristY < shoulderY;
         }
 
-        private bool IsHandOnChest(
-            Detection person,
-            DrawingHand hand)
-        {
-            if (person == null ||
-                person.Keypoints.Count <= 10 ||
-                hand == DrawingHand.None)
-                return false;
-
-            int wristIndex =
-                hand == DrawingHand.Left ? 9 : 10;
-            var wrist = person.Keypoints[wristIndex];
-            var leftShoulder = person.Keypoints[5];
-            var rightShoulder = person.Keypoints[6];
-
-            if (wrist.Score < 0.5f)
-                return false;
-
-            if (leftShoulder.Score < 0.5f)
-                return false;
-
-            if (rightShoulder.Score < 0.5f)
-                return false;
-
-            float wristX = (wrist.X - _padX) / _ratio;
-            float wristY = (wrist.Y - _padY) / _ratio;
-
-            float leftShoulderX = (leftShoulder.X - _padX) / _ratio;
-            float leftShoulderY = (leftShoulder.Y - _padY) / _ratio;
-            float rightShoulderX = (rightShoulder.X - _padX) / _ratio;
-            float rightShoulderY = (rightShoulder.Y - _padY) / _ratio;
-
-            float shoulderMidX = (leftShoulderX + rightShoulderX) / 2f;
-            float shoulderMidY = (leftShoulderY + rightShoulderY) / 2f;
-            float shoulderDx = rightShoulderX - leftShoulderX;
-            float shoulderDy = rightShoulderY - leftShoulderY;
-            float shoulderWidth = (float)Math.Sqrt(
-                shoulderDx * shoulderDx + shoulderDy * shoulderDy);
-
-            if (shoulderWidth < 20f)
-                return false;
-
-            // 胸前位置會隨人物在畫面中的大小調整，避免固定像素門檻造成遠近差異。
-            float chestX = shoulderMidX;
-            float chestY = shoulderMidY + shoulderWidth * 0.45f;
-            float radiusX = Math.Max(35f, shoulderWidth * 0.65f);
-            float radiusY = Math.Max(35f, shoulderWidth * 0.55f);
-
-            double dx = wristX - chestX;
-            double dy = wristY - chestY;
-
-            double normalizedDistance =
-                dx * dx / (radiusX * radiusX) +
-                dy * dy / (radiusY * radiusY);
-
-            return normalizedDistance <= 1d;
-        }
-
         private bool IsRaiseHandConfirmed(bool handRaised)
         {
             if (!handRaised)
@@ -2168,23 +2083,6 @@ namespace CSharp_YoloOnnx
             }
 
             return (DateTime.Now - handRaisedStart).TotalMilliseconds >= RaiseHandDelayMs;
-        }
-
-        private bool IsHandOnChestConfirmed(bool handOnChest)
-        {
-            if (!handOnChest)
-            {
-                handOnChestStart = DateTime.MinValue;
-                return false;
-            }
-
-            if (handOnChestStart == DateTime.MinValue)
-            {
-                handOnChestStart = DateTime.Now;
-                return false;
-            }
-
-            return (DateTime.Now - handOnChestStart).TotalMilliseconds >= HandOnChestDelayMs;
         }
 
         private List<Detection> NMS(List<Detection> boxes, float iouThreshold = 0.45f)
