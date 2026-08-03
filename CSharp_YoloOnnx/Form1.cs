@@ -80,6 +80,7 @@ namespace CSharp_YoloOnnx
         Button btnSelectTemplate;
         Label lblSimilarityScore;
         Label lblAirDrawStatus;
+        Label lblPerformanceDiagnostics;
         FingertipTracker fingertipTracker;
         PointF? lastFingertipPoint;
         PointF? displayedFingertipPoint;
@@ -107,6 +108,17 @@ namespace CSharp_YoloOnnx
         Thread poseInferenceThread;
         bool poseThreadComplete;
         int poseFrameSlotReserved;
+        readonly Stopwatch cameraFpsStopwatch =
+            Stopwatch.StartNew();
+        readonly Stopwatch displayFpsStopwatch =
+            Stopwatch.StartNew();
+        int cameraFrameCount;
+        int displayFrameCount;
+        double cameraFramesPerSecond;
+        double displayFramesPerSecond;
+        double poseFramesPerSecond;
+        double latestHandInferenceMilliseconds;
+        string latestHandInferenceResult = "WAIT";
         Image magicAnimationImage;
         MemoryStream magicAnimationStream;
         DateTime magicAnimationStartedAt = DateTime.MinValue;
@@ -203,11 +215,11 @@ namespace CSharp_YoloOnnx
         {
             InitializeComponent();
 
-            Text = "CSharp YOLO ONNX V1.3 Stable Tracking";
+            Text = "CSharp YOLO ONNX V1.3 Diagnostics";
             panelToolBar.Dock = DockStyle.Top;
             panelToolBar.Height = 40;
             panelStatusBar.Dock = DockStyle.Bottom;
-            panelStatusBar.Height = 54;
+            panelStatusBar.Height = 64;
             panelImage.Dock = DockStyle.Fill;
             pBox.Dock = DockStyle.Fill;
             pBox.SizeMode = PictureBoxSizeMode.Zoom;
@@ -233,7 +245,7 @@ namespace CSharp_YoloOnnx
             string modelPath = "yolov8n-pose.onnx";
             InitializeYoloSession(modelPath);
             Text =
-                "CSharp YOLO ONNX V1.3 Stable Tracking | " +
+                "CSharp YOLO ONNX V1.3 Diagnostics | " +
                 yoloExecutionProvider;
         }
 
@@ -520,9 +532,29 @@ namespace CSharp_YoloOnnx
                 Text = drawingStatusText
             };
 
+            lblPerformanceDiagnostics = new Label
+            {
+                Dock = DockStyle.Right,
+                Width = 520,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Padding = new Padding(8, 0, 8, 0),
+                BorderStyle = BorderStyle.FixedSingle,
+                Font = new Font(
+                    "Consolas",
+                    9f,
+                    FontStyle.Regular),
+                ForeColor = Color.Navy,
+                BackColor = Color.WhiteSmoke,
+                Text =
+                    "CAM -- | DISP -- | POSE -- | HAND -- | WAIT"
+            };
+
             panelStatusBar.Controls.Add(lblAirDrawStatus);
+            panelStatusBar.Controls.Add(
+                lblPerformanceDiagnostics);
             panelStatusBar.Controls.Add(lblSimilarityScore);
             lblSimilarityScore.BringToFront();
+            lblPerformanceDiagnostics.BringToFront();
         }
 
         private void TryLoadDefaultTemplate()
@@ -703,6 +735,7 @@ namespace CSharp_YoloOnnx
                         snapshot.Main,
                         snapshot.InferenceMilliseconds);
                     QueueDisplayImage(displayImage);
+                    RecordCameraFrame();
                 }
             }
             catch (Exception ex)
@@ -782,6 +815,12 @@ namespace CSharp_YoloOnnx
                                 .FirstOrDefault();
 
                         stopwatch.Stop();
+                        poseFramesPerSecond =
+                            stopwatch.Elapsed.TotalMilliseconds >
+                                0d
+                                ? 1000d /
+                                  stopwatch.Elapsed.TotalMilliseconds
+                                : 0d;
 
                         latestPoseSnapshot =
                             new PoseSnapshot(
@@ -1578,12 +1617,31 @@ namespace CSharp_YoloOnnx
                     hand == activeDrawingHand
                         ? MinimumDrawingHandPresence
                         : MinimumIdleHandPresence;
-                bool detected = fingertipTracker.TryDetect(
-                    frame,
-                    wrist,
-                    elbow,
-                    minimumHandPresence,
-                    out result);
+                Stopwatch handStopwatch =
+                    Stopwatch.StartNew();
+                bool detected;
+
+                try
+                {
+                    detected = fingertipTracker.TryDetect(
+                        frame,
+                        wrist,
+                        elbow,
+                        minimumHandPresence,
+                        out result);
+                }
+                finally
+                {
+                    handStopwatch.Stop();
+                    latestHandInferenceMilliseconds =
+                        handStopwatch.Elapsed
+                            .TotalMilliseconds;
+                }
+
+                latestHandInferenceResult =
+                    detected
+                        ? "FOUND"
+                        : "LOST";
 
                 if (!detected)
                     return false;
@@ -1601,6 +1659,7 @@ namespace CSharp_YoloOnnx
             }
             catch (Exception ex)
             {
+                latestHandInferenceResult = "ERROR";
                 Debug.WriteLine(
                     "Hand inference error (" +
                     GetHandDisplayName(hand) +
@@ -1942,6 +2001,7 @@ namespace CSharp_YoloOnnx
                 else
                 {
                     pictureBoxInvoke(latest);
+                    RecordDisplayFrame();
                     UpdateAirDrawStatusBar();
                 }
             }
@@ -2571,6 +2631,75 @@ namespace CSharp_YoloOnnx
             return false;
         }
 
+        private void RecordCameraFrame()
+        {
+            cameraFrameCount++;
+
+            if (cameraFpsStopwatch.ElapsedMilliseconds <
+                1000)
+            {
+                return;
+            }
+
+            cameraFramesPerSecond =
+                cameraFrameCount *
+                1000d /
+                Math.Max(
+                    1d,
+                    cameraFpsStopwatch
+                        .Elapsed.TotalMilliseconds);
+            cameraFrameCount = 0;
+            cameraFpsStopwatch.Restart();
+        }
+
+        private void RecordDisplayFrame()
+        {
+            displayFrameCount++;
+
+            if (displayFpsStopwatch.ElapsedMilliseconds <
+                1000)
+            {
+                return;
+            }
+
+            displayFramesPerSecond =
+                displayFrameCount *
+                1000d /
+                Math.Max(
+                    1d,
+                    displayFpsStopwatch
+                        .Elapsed.TotalMilliseconds);
+            displayFrameCount = 0;
+            displayFpsStopwatch.Restart();
+        }
+
+        private void UpdatePerformanceDiagnostics()
+        {
+            if (lblPerformanceDiagnostics == null ||
+                lblPerformanceDiagnostics.IsDisposed)
+            {
+                return;
+            }
+
+            PoseSnapshot pose =
+                latestPoseSnapshot ??
+                PoseSnapshot.Empty;
+            lblPerformanceDiagnostics.Text =
+                "CAM " +
+                cameraFramesPerSecond.ToString("0.0") +
+                " FPS | DISP " +
+                displayFramesPerSecond.ToString("0.0") +
+                " FPS | POSE " +
+                pose.InferenceMilliseconds.ToString("0") +
+                " ms/" +
+                poseFramesPerSecond.ToString("0.0") +
+                " FPS | HAND " +
+                latestHandInferenceMilliseconds
+                    .ToString("0") +
+                " ms | " +
+                latestHandInferenceResult;
+        }
+
         private void UpdateAirDrawStatusBar()
         {
             if (lblAirDrawStatus == null ||
@@ -2604,6 +2733,8 @@ namespace CSharp_YoloOnnx
                 stateText +
                 "｜" +
                 drawingStatusText;
+
+            UpdatePerformanceDiagnostics();
 
             if (lblSimilarityScore == null ||
                 lblSimilarityScore.IsDisposed)
