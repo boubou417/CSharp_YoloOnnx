@@ -64,9 +64,9 @@ namespace CSharp_YoloOnnx
         const float MinimumDrawingHandPresence = 0.45f;
         const int YellowStartHoldMs = 600;
         const int YellowFinishHoldMs = 900;
-        const int YellowMissingBreakMs = 450;
+        const int YellowMissingBreakMs = 500;
         const int YellowReacquireConfirmMs = 200;
-        const int YellowTrackingLossGraceMs = 240;
+        const int YellowTrackingLossGraceMs = 500;
         const int YellowMaximumInterpolatedPoints = 16;
         const float YellowHoldRadius = 30f;
         const float YellowReacquireRadius = 36f;
@@ -282,7 +282,7 @@ namespace CSharp_YoloOnnx
         {
             InitializeComponent();
 
-            Text = "CSharp YOLO ONNX V1.5.9 High-Resolution Tolerance";
+            Text = "CSharp YOLO ONNX V1.5.10 Locked Yellow Tracking";
             panelToolBar.Dock = DockStyle.Top;
             panelToolBar.Height = 40;
             panelStatusBar.Dock = DockStyle.Bottom;
@@ -313,7 +313,7 @@ namespace CSharp_YoloOnnx
             string modelPath = "yolov8n-pose.onnx";
             InitializeYoloSession(modelPath);
             Text =
-                "CSharp YOLO ONNX V1.5.9 High-Resolution Tolerance | " +
+                "CSharp YOLO ONNX V1.5.10 Locked Yellow Tracking | " +
                 yoloExecutionProvider;
         }
 
