@@ -5,25 +5,33 @@ using System.Drawing.Imaging;
 namespace CSharp_YoloOnnx
 {
     /// <summary>
-    /// Tracks the largest connected high-saturation yellow marker directly
-    /// from the camera frame. Sampling every third pixel keeps the tracker
-    /// lightweight enough to run on the acquisition thread.
+    /// Tracks a saturated yellow marker. Once acquired, a velocity-predicted
+    /// region is searched at full pixel resolution; full-frame sampling is
+    /// used only for initial acquisition and fallback.
     /// </summary>
     public sealed class YellowTipTracker
     {
-        private const int SampleStep = 3;
-        private const int MinimumComponentSamples = 6;
-        private const float PreviousPositionWeight = 0.025f;
+        private const int FullFrameSampleStep = 3;
+        private const int RoiSampleStep = 1;
+        private const int MinimumFullFrameSamples = 6;
+        private const int MinimumRoiSamples = 18;
+        private const int PredictionMemoryMs = 500;
+        private const float MinimumRoiRadius = 140f;
+        private const float MaximumRoiRadius = 420f;
+        private const float RoiMotionExpansion = 1.8f;
+        private const float PreviousPositionWeight = 0.02f;
 
         private bool[] mask;
         private int[] queue;
-        private int gridWidth;
-        private int gridHeight;
         private PointF? previousPoint;
+        private PointF velocityPixelsPerMillisecond;
+        private DateTime previousPointSeenAt = DateTime.MinValue;
 
         public void Reset()
         {
             previousPoint = null;
+            velocityPixelsPerMillisecond = PointF.Empty;
+            previousPointSeenAt = DateTime.MinValue;
         }
 
         public unsafe bool TryDetect(
@@ -35,16 +43,11 @@ namespace CSharp_YoloOnnx
             bounds = RectangleF.Empty;
 
             if (frame == null ||
-                frame.Width < SampleStep ||
-                frame.Height < SampleStep)
+                frame.Width < FullFrameSampleStep ||
+                frame.Height < FullFrameSampleStep)
             {
                 return false;
             }
-
-            int width = (frame.Width + SampleStep - 1) / SampleStep;
-            int height = (frame.Height + SampleStep - 1) / SampleStep;
-            EnsureBuffers(width, height);
-            Array.Clear(mask, 0, width * height);
 
             Rectangle frameBounds =
                 new Rectangle(0, 0, frame.Width, frame.Height);
@@ -56,44 +59,161 @@ namespace CSharp_YoloOnnx
             try
             {
                 int bytesPerPixel =
-                    Image.GetPixelFormatSize(frame.PixelFormat) / 8;
+                    Image.GetPixelFormatSize(
+                        frame.PixelFormat) / 8;
 
                 if (bytesPerPixel < 3)
                     return false;
 
-                byte* scan0 = (byte*)data.Scan0.ToPointer();
+                DateTime now = DateTime.UtcNow;
+                PointF prediction = PointF.Empty;
+                bool hasPrediction =
+                    previousPoint.HasValue &&
+                    previousPointSeenAt != DateTime.MinValue &&
+                    (now - previousPointSeenAt)
+                        .TotalMilliseconds <=
+                    PredictionMemoryMs;
 
-                for (int gy = 0; gy < height; gy++)
+                if (hasPrediction)
                 {
-                    int sourceY = Math.Min(
-                        frame.Height - 1,
-                        gy * SampleStep);
-                    byte* row =
-                        data.Stride >= 0
-                            ? scan0 + sourceY * data.Stride
-                            : scan0 +
-                              (frame.Height - 1 - sourceY) *
-                              -data.Stride;
+                    double elapsedMilliseconds =
+                        Math.Max(
+                            1d,
+                            (now - previousPointSeenAt)
+                                .TotalMilliseconds);
+                    prediction = new PointF(
+                        previousPoint.Value.X +
+                        velocityPixelsPerMillisecond.X *
+                        (float)elapsedMilliseconds,
+                        previousPoint.Value.Y +
+                        velocityPixelsPerMillisecond.Y *
+                        (float)elapsedMilliseconds);
+                    float speed =
+                        (float)Math.Sqrt(
+                            velocityPixelsPerMillisecond.X *
+                            velocityPixelsPerMillisecond.X +
+                            velocityPixelsPerMillisecond.Y *
+                            velocityPixelsPerMillisecond.Y);
+                    float radius =
+                        Math.Max(
+                            MinimumRoiRadius,
+                            Math.Min(
+                                MaximumRoiRadius,
+                                MinimumRoiRadius +
+                                speed *
+                                (float)elapsedMilliseconds *
+                                RoiMotionExpansion));
+                    Rectangle roi =
+                        IntersectWithFrame(
+                            prediction,
+                            radius,
+                            frame.Size);
 
-                    for (int gx = 0; gx < width; gx++)
+                    if (TryFindYellowComponent(
+                        data,
+                        frame.Size,
+                        bytesPerPixel,
+                        roi,
+                        RoiSampleStep,
+                        MinimumRoiSamples,
+                        prediction,
+                        out tip,
+                        out bounds))
                     {
-                        int sourceX = Math.Min(
-                            frame.Width - 1,
-                            gx * SampleStep);
-                        byte* pixel =
-                            row + sourceX * bytesPerPixel;
-
-                        mask[gy * width + gx] =
-                            IsYellow(
-                                pixel[2],
-                                pixel[1],
-                                pixel[0]);
+                        UpdateMotion(tip, now);
+                        return true;
                     }
                 }
+
+                PointF reference =
+                    previousPoint ?? PointF.Empty;
+
+                if (TryFindYellowComponent(
+                    data,
+                    frame.Size,
+                    bytesPerPixel,
+                    frameBounds,
+                    FullFrameSampleStep,
+                    MinimumFullFrameSamples,
+                    reference,
+                    out tip,
+                    out bounds))
+                {
+                    UpdateMotion(tip, now);
+                    return true;
+                }
+
+                return false;
             }
             finally
             {
                 frame.UnlockBits(data);
+            }
+        }
+
+        private unsafe bool TryFindYellowComponent(
+            BitmapData data,
+            Size frameSize,
+            int bytesPerPixel,
+            Rectangle searchRegion,
+            int sampleStep,
+            int minimumSamples,
+            PointF referencePoint,
+            out PointF tip,
+            out RectangleF bounds)
+        {
+            tip = PointF.Empty;
+            bounds = RectangleF.Empty;
+
+            if (searchRegion.Width <= 0 ||
+                searchRegion.Height <= 0)
+            {
+                return false;
+            }
+
+            int width =
+                (searchRegion.Width +
+                 sampleStep - 1) /
+                sampleStep;
+            int height =
+                (searchRegion.Height +
+                 sampleStep - 1) /
+                sampleStep;
+            int requiredLength = width * height;
+            EnsureBuffers(requiredLength);
+            Array.Clear(mask, 0, requiredLength);
+            byte* scan0 = (byte*)data.Scan0.ToPointer();
+
+            for (int gy = 0; gy < height; gy++)
+            {
+                int sourceY = Math.Min(
+                    searchRegion.Bottom - 1,
+                    searchRegion.Top +
+                    gy * sampleStep);
+                byte* row =
+                    data.Stride >= 0
+                        ? scan0 + sourceY * data.Stride
+                        : scan0 +
+                          (frameSize.Height -
+                           1 -
+                           sourceY) *
+                          -data.Stride;
+
+                for (int gx = 0; gx < width; gx++)
+                {
+                    int sourceX = Math.Min(
+                        searchRegion.Right - 1,
+                        searchRegion.Left +
+                        gx * sampleStep);
+                    byte* pixel =
+                        row + sourceX * bytesPerPixel;
+
+                    mask[gy * width + gx] =
+                        IsYellow(
+                            pixel[2],
+                            pixel[1],
+                            pixel[0]);
+                }
             }
 
             int bestCount = 0;
@@ -106,7 +226,7 @@ namespace CSharp_YoloOnnx
             int bestMaxY = 0;
 
             for (int index = 0;
-                index < width * height;
+                index < requiredLength;
                 index++)
             {
                 if (!mask[index])
@@ -137,77 +257,53 @@ namespace CSharp_YoloOnnx
                     maxX = Math.Max(maxX, x);
                     maxY = Math.Max(maxY, y);
 
-                    EnqueueIfYellow(
-                        x - 1,
-                        y,
-                        width,
-                        height,
-                        ref tail);
-                    EnqueueIfYellow(
-                        x + 1,
-                        y,
-                        width,
-                        height,
-                        ref tail);
-                    EnqueueIfYellow(
-                        x,
-                        y - 1,
-                        width,
-                        height,
-                        ref tail);
-                    EnqueueIfYellow(
-                        x,
-                        y + 1,
-                        width,
-                        height,
-                        ref tail);
-                    EnqueueIfYellow(
-                        x - 1,
-                        y - 1,
-                        width,
-                        height,
-                        ref tail);
-                    EnqueueIfYellow(
-                        x + 1,
-                        y - 1,
-                        width,
-                        height,
-                        ref tail);
-                    EnqueueIfYellow(
-                        x - 1,
-                        y + 1,
-                        width,
-                        height,
-                        ref tail);
-                    EnqueueIfYellow(
-                        x + 1,
-                        y + 1,
-                        width,
-                        height,
-                        ref tail);
+                    // A two-sample neighbourhood joins thin or slightly
+                    // broken streaks created by fast marker motion.
+                    for (int offsetY = -2;
+                        offsetY <= 2;
+                        offsetY++)
+                    {
+                        for (int offsetX = -2;
+                            offsetX <= 2;
+                            offsetX++)
+                        {
+                            if (offsetX == 0 &&
+                                offsetY == 0)
+                            {
+                                continue;
+                            }
+
+                            EnqueueIfYellow(
+                                x + offsetX,
+                                y + offsetY,
+                                width,
+                                height,
+                                ref tail);
+                        }
+                    }
                 }
 
-                if (count < MinimumComponentSamples)
+                if (count < minimumSamples)
                     continue;
 
                 float centerX =
-                    sumX / count * SampleStep;
+                    searchRegion.Left +
+                    sumX / count *
+                    sampleStep;
                 float centerY =
-                    sumY / count * SampleStep;
-                float score = count;
-
-                if (previousPoint.HasValue)
-                {
-                    float dx =
-                        centerX - previousPoint.Value.X;
-                    float dy =
-                        centerY - previousPoint.Value.Y;
-                    float distance =
-                        (float)Math.Sqrt(dx * dx + dy * dy);
-
-                    score -= distance *
-                        PreviousPositionWeight;
-                }
+                    searchRegion.Top +
+                    sumY / count *
+                    sampleStep;
+                float dx =
+                    centerX - referencePoint.X;
+                float dy =
+                    centerY - referencePoint.Y;
+                float distance =
+                    (float)Math.Sqrt(dx * dx + dy * dy);
+                float score =
+                    count -
+                    distance *
+                    PreviousPositionWeight;
 
                 if (score <= bestScore)
                     continue;
@@ -222,38 +318,127 @@ namespace CSharp_YoloOnnx
                 bestMaxY = maxY;
             }
 
-            if (bestCount < MinimumComponentSamples)
+            if (bestCount < minimumSamples)
                 return false;
 
             tip = new PointF(
-                bestSumX / bestCount * SampleStep,
-                bestSumY / bestCount * SampleStep);
+                searchRegion.Left +
+                bestSumX / bestCount *
+                sampleStep,
+                searchRegion.Top +
+                bestSumY / bestCount *
+                sampleStep);
             bounds = RectangleF.FromLTRB(
-                bestMinX * SampleStep,
-                bestMinY * SampleStep,
+                searchRegion.Left +
+                bestMinX * sampleStep,
+                searchRegion.Top +
+                bestMinY * sampleStep,
                 Math.Min(
-                    frame.Width,
-                    (bestMaxX + 1) * SampleStep),
+                    frameSize.Width,
+                    searchRegion.Left +
+                    (bestMaxX + 1) *
+                    sampleStep),
                 Math.Min(
-                    frame.Height,
-                    (bestMaxY + 1) * SampleStep));
-            previousPoint = tip;
+                    frameSize.Height,
+                    searchRegion.Top +
+                    (bestMaxY + 1) *
+                    sampleStep));
             return true;
         }
 
-        private void EnsureBuffers(int width, int height)
+        private void UpdateMotion(
+            PointF point,
+            DateTime now)
         {
-            int requiredLength = width * height;
+            if (previousPoint.HasValue &&
+                previousPointSeenAt != DateTime.MinValue)
+            {
+                double elapsedMilliseconds =
+                    Math.Max(
+                        1d,
+                        (now - previousPointSeenAt)
+                            .TotalMilliseconds);
 
+                if (elapsedMilliseconds <=
+                    PredictionMemoryMs)
+                {
+                    float instantVelocityX =
+                        (point.X -
+                         previousPoint.Value.X) /
+                        (float)elapsedMilliseconds;
+                    float instantVelocityY =
+                        (point.Y -
+                         previousPoint.Value.Y) /
+                        (float)elapsedMilliseconds;
+                    velocityPixelsPerMillisecond =
+                        new PointF(
+                            velocityPixelsPerMillisecond.X *
+                            0.55f +
+                            instantVelocityX *
+                            0.45f,
+                            velocityPixelsPerMillisecond.Y *
+                            0.55f +
+                            instantVelocityY *
+                            0.45f);
+                }
+                else
+                {
+                    velocityPixelsPerMillisecond =
+                        PointF.Empty;
+                }
+            }
+
+            previousPoint = point;
+            previousPointSeenAt = now;
+        }
+
+        private static Rectangle IntersectWithFrame(
+            PointF center,
+            float radius,
+            Size frameSize)
+        {
+            int left =
+                Math.Max(
+                    0,
+                    (int)Math.Floor(
+                        center.X - radius));
+            int top =
+                Math.Max(
+                    0,
+                    (int)Math.Floor(
+                        center.Y - radius));
+            int right =
+                Math.Min(
+                    frameSize.Width,
+                    (int)Math.Ceiling(
+                        center.X + radius));
+            int bottom =
+                Math.Min(
+                    frameSize.Height,
+                    (int)Math.Ceiling(
+                        center.Y + radius));
+
+            if (right <= left ||
+                bottom <= top)
+            {
+                return Rectangle.Empty;
+            }
+
+            return Rectangle.FromLTRB(
+                left,
+                top,
+                right,
+                bottom);
+        }
+
+        private void EnsureBuffers(int requiredLength)
+        {
             if (mask == null ||
                 mask.Length < requiredLength)
             {
                 mask = new bool[requiredLength];
                 queue = new int[requiredLength];
             }
-
-            gridWidth = width;
-            gridHeight = height;
         }
 
         private void EnqueueIfYellow(
@@ -292,8 +477,8 @@ namespace CSharp_YoloOnnx
                 Math.Min(r, Math.Min(g, b));
             float chroma = maximum - minimum;
 
-            if (maximum < 0.55f ||
-                chroma < 0.18f)
+            if (maximum < 0.52f ||
+                chroma < 0.16f)
             {
                 return false;
             }
@@ -303,7 +488,7 @@ namespace CSharp_YoloOnnx
                     ? 0f
                     : chroma / maximum;
 
-            if (saturation < 0.34f)
+            if (saturation < 0.31f)
                 return false;
 
             float hue;
@@ -330,10 +515,8 @@ namespace CSharp_YoloOnnx
             if (hue < 0f)
                 hue += 360f;
 
-            // Yellow tape is normally around 45-65 degrees. The slightly
-            // wider range tolerates camera white-balance changes while
-            // excluding orange/red skin tones.
-            return hue >= 38f && hue <= 76f;
+            return hue >= 36f &&
+                hue <= 78f;
         }
     }
 }
