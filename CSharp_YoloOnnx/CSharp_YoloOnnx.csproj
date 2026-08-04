@@ -75,6 +75,7 @@
   <ItemGroup>
     <Compile Include="AirDrawing.cs" />
     <Compile Include="FingertipTracker.cs" />
+    <Compile Include="YellowTipTracker.cs" />
     <Compile Include="Form1.cs">
       <SubType>Form</SubType>
     </Compile>
