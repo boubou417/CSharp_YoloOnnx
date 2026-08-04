@@ -14,16 +14,20 @@ namespace CSharp_YoloOnnx
         private const int SampleStep = 3;
         private const int MinimumComponentSamples = 10;
         private const float PreviousPositionWeight = 0.12f;
+        private const float MaximumLockedJump = 160f;
+        private const int PositionLockMs = 450;
 
         private bool[] mask;
         private int[] queue;
         private int gridWidth;
         private int gridHeight;
         private PointF? previousPoint;
+        private DateTime previousPointSeenAt = DateTime.MinValue;
 
         public void Reset()
         {
             previousPoint = null;
+            previousPointSeenAt = DateTime.MinValue;
         }
 
         public unsafe bool TryDetect(
@@ -96,6 +100,12 @@ namespace CSharp_YoloOnnx
                 frame.UnlockBits(data);
             }
 
+            DateTime now = DateTime.UtcNow;
+            bool positionLocked =
+                previousPoint.HasValue &&
+                previousPointSeenAt != DateTime.MinValue &&
+                (now - previousPointSeenAt).TotalMilliseconds <=
+                    PositionLockMs;
             int bestCount = 0;
             float bestScore = float.MinValue;
             float bestSumX = 0f;
@@ -180,6 +190,13 @@ namespace CSharp_YoloOnnx
                         centerY - previousPoint.Value.Y;
                     float distance =
                         (float)Math.Sqrt(dx * dx + dy * dy);
+
+                    if (positionLocked &&
+                        distance > MaximumLockedJump)
+                    {
+                        continue;
+                    }
+
                     score -= distance *
                         PreviousPositionWeight;
                 }
@@ -213,6 +230,7 @@ namespace CSharp_YoloOnnx
                     frame.Height,
                     (bestMaxY + 1) * SampleStep));
             previousPoint = tip;
+            previousPointSeenAt = now;
             return true;
         }
 
@@ -258,19 +276,57 @@ namespace CSharp_YoloOnnx
             byte green,
             byte blue)
         {
-            int maximum =
-                Math.Max(red, Math.Max(green, blue));
-            int minimum =
-                Math.Min(red, Math.Min(green, blue));
-            int chroma = maximum - minimum;
+            float r = red / 255f;
+            float g = green / 255f;
+            float b = blue / 255f;
+            float maximum =
+                Math.Max(r, Math.Max(g, b));
+            float minimum =
+                Math.Min(r, Math.Min(g, b));
+            float chroma = maximum - minimum;
 
-            return red >= 145 &&
-                green >= 120 &&
-                blue <= 175 &&
-                chroma >= 38 &&
-                red - blue >= 35 &&
-                green - blue >= 28 &&
-                Math.Abs(red - green) <= 105;
+            if (maximum < 0.55f ||
+                chroma < 0.18f)
+            {
+                return false;
+            }
+
+            float saturation =
+                maximum <= 0f
+                    ? 0f
+                    : chroma / maximum;
+
+            if (saturation < 0.34f)
+                return false;
+
+            float hue;
+
+            if (maximum == r)
+            {
+                hue =
+                    60f *
+                    (((g - b) / chroma) % 6f);
+            }
+            else if (maximum == g)
+            {
+                hue =
+                    60f *
+                    (((b - r) / chroma) + 2f);
+            }
+            else
+            {
+                hue =
+                    60f *
+                    (((r - g) / chroma) + 4f);
+            }
+
+            if (hue < 0f)
+                hue += 360f;
+
+            // Yellow tape is normally around 45-65 degrees. The slightly
+            // wider range tolerates camera white-balance changes while
+            // excluding orange/red skin tones.
+            return hue >= 38f && hue <= 76f;
         }
     }
 }
