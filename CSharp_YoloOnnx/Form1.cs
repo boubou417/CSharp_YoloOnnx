@@ -66,11 +66,18 @@ namespace CSharp_YoloOnnx
         const int YellowFinishHoldMs = 900;
         const int YellowMissingBreakMs = 300;
         const int YellowReacquireConfirmMs = 200;
+        const int YellowTrackingLossGraceMs = 120;
+        const int YellowMaximumInterpolatedPoints = 16;
         const float YellowHoldRadius = 30f;
         const float YellowReacquireRadius = 36f;
-        const float YellowMaximumFrameJump = 160f;
+        const float YellowBaseFrameJump = 80f;
+        const float YellowMaximumSpeedPixelsPerSecond = 7000f;
+        const float YellowMaximumAdaptiveJump = 480f;
         const float YellowJitterDeadZone = 4f;
-        const float YellowPositionSmoothing = 0.45f;
+        const float YellowSlowPositionSmoothing = 0.55f;
+        const float YellowFastPositionSmoothing = 0.85f;
+        const float YellowFastMotionDistance = 60f;
+        const float YellowInterpolationSpacing = 16f;
         const float YellowStartMoveDistance = 40f;
 
         DateTime drawingFinishedAt = DateTime.MinValue;
@@ -103,6 +110,8 @@ namespace CSharp_YoloOnnx
         bool yellowMovedAfterStart;
         bool yellowTrackingConfirmed;
         DateTime yellowCandidateStartedAt = DateTime.MinValue;
+        DateTime yellowRawMissingSince = DateTime.MinValue;
+        DateTime lastYellowAcceptedAt = DateTime.MinValue;
         PointF? yellowCandidateAnchor;
         PointF? filteredYellowTip;
         PointF? lastFingertipPoint;
@@ -273,7 +282,7 @@ namespace CSharp_YoloOnnx
         {
             InitializeComponent();
 
-            Text = "CSharp YOLO ONNX V1.5.1 Stable Yellow Tip";
+            Text = "CSharp YOLO ONNX V1.5.2 Fast Yellow Tip";
             panelToolBar.Dock = DockStyle.Top;
             panelToolBar.Height = 40;
             panelStatusBar.Dock = DockStyle.Bottom;
@@ -304,7 +313,7 @@ namespace CSharp_YoloOnnx
             string modelPath = "yolov8n-pose.onnx";
             InitializeYoloSession(modelPath);
             Text =
-                "CSharp YOLO ONNX V1.5.1 Stable Yellow Tip | " +
+                "CSharp YOLO ONNX V1.5.2 Fast Yellow Tip | " +
                 yoloExecutionProvider;
         }
 
@@ -1461,7 +1470,7 @@ namespace CSharp_YoloOnnx
                     yellowMovedAfterStart = true;
                     drawingStrokeStartPending = true;
                     ResetYellowHold();
-                    AddDrawingPoint(tip);
+                    AddYellowDrawingPoint(tip);
                 }
                 else
                 {
@@ -1472,7 +1481,7 @@ namespace CSharp_YoloOnnx
                 return;
             }
 
-            AddDrawingPoint(tip);
+            AddYellowDrawingPoint(tip);
             UpdateYellowHold(tip, now);
             int finishProgress = GetProgressPercent(
                 yellowHoldStartedAt,
@@ -1514,14 +1523,30 @@ namespace CSharp_YoloOnnx
                 out rawTip,
                 out rawBounds))
             {
-                yellowTrackingConfirmed = false;
-                yellowCandidateStartedAt = DateTime.MinValue;
-                yellowCandidateAnchor = null;
-                filteredYellowTip = null;
+                if (yellowRawMissingSince ==
+                    DateTime.MinValue)
+                {
+                    yellowRawMissingSince = now;
+                }
+
+                if ((now - yellowRawMissingSince)
+                        .TotalMilliseconds >=
+                    YellowTrackingLossGraceMs)
+                {
+                    yellowTrackingConfirmed = false;
+                    yellowCandidateStartedAt =
+                        DateTime.MinValue;
+                    yellowCandidateAnchor = null;
+                    filteredYellowTip = null;
+                    lastYellowAcceptedAt =
+                        DateTime.MinValue;
+                }
+
                 return false;
             }
 
             candidateVisible = true;
+            yellowRawMissingSince = DateTime.MinValue;
 
             if (!yellowTrackingConfirmed)
             {
@@ -1556,6 +1581,7 @@ namespace CSharp_YoloOnnx
 
                 yellowTrackingConfirmed = true;
                 filteredYellowTip = rawTip;
+                lastYellowAcceptedAt = now;
                 yellowCandidateStartedAt = DateTime.MinValue;
                 yellowCandidateAnchor = null;
             }
@@ -1565,15 +1591,27 @@ namespace CSharp_YoloOnnx
                 float dx = rawTip.X - previous.X;
                 float dy = rawTip.Y - previous.Y;
                 float distanceSquared = dx * dx + dy * dy;
+                double elapsedMilliseconds =
+                    lastYellowAcceptedAt == DateTime.MinValue
+                        ? 33d
+                        : Math.Max(
+                            1d,
+                            (now - lastYellowAcceptedAt)
+                                .TotalMilliseconds);
+                float maximumJump =
+                    Math.Min(
+                        YellowMaximumAdaptiveJump,
+                        YellowBaseFrameJump +
+                        YellowMaximumSpeedPixelsPerSecond *
+                        (float)elapsedMilliseconds /
+                        1000f);
 
                 if (distanceSquared >
-                    YellowMaximumFrameJump *
-                    YellowMaximumFrameJump)
+                    maximumJump * maximumJump)
                 {
-                    yellowTrackingConfirmed = false;
-                    yellowCandidateAnchor = rawTip;
-                    yellowCandidateStartedAt = now;
-                    filteredYellowTip = null;
+                    // Keep the existing lock. The elapsed-time allowance
+                    // grows on the next frame, so a valid fast marker can
+                    // catch up without requiring a stationary reacquire.
                     return false;
                 }
 
@@ -1585,23 +1623,66 @@ namespace CSharp_YoloOnnx
                 }
                 else
                 {
+                    float smoothing =
+                        distanceSquared >=
+                            YellowFastMotionDistance *
+                            YellowFastMotionDistance
+                            ? YellowFastPositionSmoothing
+                            : YellowSlowPositionSmoothing;
                     rawTip = new PointF(
-                        previous.X +
-                        dx * YellowPositionSmoothing,
-                        previous.Y +
-                        dy * YellowPositionSmoothing);
+                        previous.X + dx * smoothing,
+                        previous.Y + dy * smoothing);
                 }
 
                 filteredYellowTip = rawTip;
+                lastYellowAcceptedAt = now;
             }
             else
             {
                 filteredYellowTip = rawTip;
+                lastYellowAcceptedAt = now;
             }
 
             tip = filteredYellowTip.Value;
             bounds = rawBounds;
             return true;
+        }
+
+        private void AddYellowDrawingPoint(PointF point)
+        {
+            if (drawingStrokeStartPending ||
+                drawingPoints.Count == 0)
+            {
+                AddDrawingPoint(point);
+                return;
+            }
+
+            PointF previous =
+                drawingPoints[drawingPoints.Count - 1];
+            float dx = point.X - previous.X;
+            float dy = point.Y - previous.Y;
+            float distance =
+                (float)Math.Sqrt(dx * dx + dy * dy);
+            int segmentCount =
+                Math.Min(
+                    YellowMaximumInterpolatedPoints,
+                    Math.Max(
+                        1,
+                        (int)Math.Ceiling(
+                            distance /
+                            YellowInterpolationSpacing)));
+
+            for (int segment = 1;
+                segment <= segmentCount;
+                segment++)
+            {
+                float amount =
+                    segment / (float)segmentCount;
+                AddDrawingPoint(
+                    new PointF(
+                        previous.X + dx * amount,
+                        previous.Y + dy * amount));
+            }
         }
 
         private void StartYellowTipDrawing(PointF tip)
@@ -1653,6 +1734,8 @@ namespace CSharp_YoloOnnx
             yellowTipTracker.Reset();
             yellowTrackingConfirmed = false;
             yellowCandidateStartedAt = DateTime.MinValue;
+            yellowRawMissingSince = DateTime.MinValue;
+            lastYellowAcceptedAt = DateTime.MinValue;
             yellowCandidateAnchor = null;
             filteredYellowTip = null;
             yellowMissingSince = DateTime.MinValue;
