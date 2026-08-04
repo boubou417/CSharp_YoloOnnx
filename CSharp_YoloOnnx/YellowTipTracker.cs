@@ -19,7 +19,12 @@ namespace CSharp_YoloOnnx
         private const float MinimumRoiRadius = 140f;
         private const float MaximumRoiRadius = 420f;
         private const float RoiMotionExpansion = 1.8f;
-        private const float PreviousPositionWeight = 0.02f;
+        private const float PreviousPositionWeight = 0.08f;
+        private const int PendingJumpMemoryMs = 140;
+        private const float SuspiciousJumpDiagonalRatio = 0.035f;
+        private const float PredictionErrorDiagonalRatio = 0.055f;
+        private const float PendingMatchDiagonalRatio = 0.040f;
+        private const float MaximumConfirmedStepDiagonalRatio = 0.20f;
         private const int RedOcclusionGraceMs = 80;
         private const float RedSearchRadius = 60f;
         private const float RedContactDistance = 20f;
@@ -38,6 +43,8 @@ namespace CSharp_YoloOnnx
         private PointF velocityPixelsPerMillisecond;
         private DateTime previousPointSeenAt = DateTime.MinValue;
         private DateTime lastRedYellowPairSeenAt = DateTime.MinValue;
+        private PointF? pendingJumpPoint;
+        private DateTime pendingJumpSeenAt = DateTime.MinValue;
 
         public void Reset()
         {
@@ -45,6 +52,7 @@ namespace CSharp_YoloOnnx
             velocityPixelsPerMillisecond = PointF.Empty;
             previousPointSeenAt = DateTime.MinValue;
             lastRedYellowPairSeenAt = DateTime.MinValue;
+            ClearPendingJump();
         }
 
         public unsafe bool TryDetect(
@@ -122,6 +130,9 @@ namespace CSharp_YoloOnnx
                             radius,
                             frame.Size);
 
+                    DateTime redPairBeforeSearch =
+                        lastRedYellowPairSeenAt;
+
                     if (TryFindYellowComponent(
                         data,
                         frame.Size,
@@ -137,13 +148,31 @@ namespace CSharp_YoloOnnx
                         out tip,
                         out bounds))
                     {
-                        UpdateMotion(tip, now);
-                        return true;
+                        if (AcceptMotionCandidate(
+                            tip,
+                            now,
+                            frame.Size))
+                        {
+                            UpdateMotion(tip, now);
+                            return true;
+                        }
+
+                        // A provisional jump must not refresh the red
+                        // occlusion grace or fall through to a different
+                        // full-frame object during the same frame.
+                        lastRedYellowPairSeenAt =
+                            redPairBeforeSearch;
+                        tip = PointF.Empty;
+                        bounds = RectangleF.Empty;
+                        return false;
                     }
                 }
 
                 PointF reference =
                     previousPoint ?? PointF.Empty;
+
+                DateTime redPairBeforeFullSearch =
+                    lastRedYellowPairSeenAt;
 
                 if (TryFindYellowComponent(
                     data,
@@ -158,8 +187,19 @@ namespace CSharp_YoloOnnx
                     out tip,
                     out bounds))
                 {
-                    UpdateMotion(tip, now);
-                    return true;
+                    if (AcceptMotionCandidate(
+                        tip,
+                        now,
+                        frame.Size))
+                    {
+                        UpdateMotion(tip, now);
+                        return true;
+                    }
+
+                    lastRedYellowPairSeenAt =
+                        redPairBeforeFullSearch;
+                    tip = PointF.Empty;
+                    bounds = RectangleF.Empty;
                 }
 
                 return false;
@@ -364,10 +404,18 @@ namespace CSharp_YoloOnnx
                     centerY - referencePoint.Y;
                 float distance =
                     (float)Math.Sqrt(dx * dx + dy * dy);
+                bool hasReference =
+                    referencePoint.X != 0f ||
+                    referencePoint.Y != 0f;
                 float score =
                     count -
                     distance *
-                    PreviousPositionWeight;
+                    (hasReference
+                        ? PreviousPositionWeight
+                        : 0f) +
+                    (hasRedSupport
+                        ? Math.Max(12f, count * 0.25f)
+                        : -12f);
 
                 if (score <= bestScore)
                     continue;
@@ -630,6 +678,167 @@ namespace CSharp_YoloOnnx
 
             redMask[index] = false;
             redQueue[tail++] = index;
+        }
+
+        private bool AcceptMotionCandidate(
+            PointF candidate,
+            DateTime now,
+            Size frameSize)
+        {
+            if (!previousPoint.HasValue ||
+                previousPointSeenAt == DateTime.MinValue ||
+                (now - previousPointSeenAt)
+                    .TotalMilliseconds >
+                PredictionMemoryMs)
+            {
+                ClearPendingJump();
+                return true;
+            }
+
+            float diagonal =
+                (float)Math.Sqrt(
+                    frameSize.Width * frameSize.Width +
+                    frameSize.Height * frameSize.Height);
+            double elapsedMilliseconds =
+                Math.Max(
+                    1d,
+                    (now - previousPointSeenAt)
+                        .TotalMilliseconds);
+            float dx =
+                candidate.X - previousPoint.Value.X;
+            float dy =
+                candidate.Y - previousPoint.Value.Y;
+            float distance =
+                (float)Math.Sqrt(dx * dx + dy * dy);
+            PointF expected = new PointF(
+                previousPoint.Value.X +
+                velocityPixelsPerMillisecond.X *
+                (float)elapsedMilliseconds,
+                previousPoint.Value.Y +
+                velocityPixelsPerMillisecond.Y *
+                (float)elapsedMilliseconds);
+            float expectedDx = candidate.X - expected.X;
+            float expectedDy = candidate.Y - expected.Y;
+            float predictionError =
+                (float)Math.Sqrt(
+                    expectedDx * expectedDx +
+                    expectedDy * expectedDy);
+            float previousSpeed =
+                (float)Math.Sqrt(
+                    velocityPixelsPerMillisecond.X *
+                    velocityPixelsPerMillisecond.X +
+                    velocityPixelsPerMillisecond.Y *
+                    velocityPixelsPerMillisecond.Y);
+            float elapsedScale =
+                Math.Max(
+                    1f,
+                    Math.Min(
+                        2.5f,
+                        (float)elapsedMilliseconds / 33f));
+            float suspiciousDistance =
+                Math.Max(
+                    48f,
+                    diagonal *
+                    SuspiciousJumpDiagonalRatio *
+                    elapsedScale);
+            float predictionAllowance =
+                Math.Max(
+                    diagonal *
+                    PredictionErrorDiagonalRatio,
+                    previousSpeed *
+                    (float)elapsedMilliseconds *
+                    1.35f +
+                    diagonal * 0.012f);
+            bool reversesDirection = false;
+
+            if (previousSpeed > 0.10f &&
+                distance > 1f)
+            {
+                float dot =
+                    dx *
+                    velocityPixelsPerMillisecond.X +
+                    dy *
+                    velocityPixelsPerMillisecond.Y;
+                reversesDirection =
+                    dot /
+                    (distance * previousSpeed) <
+                    -0.25f;
+            }
+
+            bool suspicious =
+                distance > suspiciousDistance &&
+                (predictionError > predictionAllowance ||
+                 reversesDirection);
+
+            if (!suspicious)
+            {
+                ClearPendingJump();
+                return true;
+            }
+
+            if (pendingJumpPoint.HasValue &&
+                pendingJumpSeenAt != DateTime.MinValue &&
+                (now - pendingJumpSeenAt)
+                    .TotalMilliseconds <=
+                PendingJumpMemoryMs)
+            {
+                float pendingDx =
+                    candidate.X - pendingJumpPoint.Value.X;
+                float pendingDy =
+                    candidate.Y - pendingJumpPoint.Value.Y;
+                float pendingStep =
+                    (float)Math.Sqrt(
+                        pendingDx * pendingDx +
+                        pendingDy * pendingDy);
+                float firstDx =
+                    pendingJumpPoint.Value.X -
+                    previousPoint.Value.X;
+                float firstDy =
+                    pendingJumpPoint.Value.Y -
+                    previousPoint.Value.Y;
+                float firstStep =
+                    (float)Math.Sqrt(
+                        firstDx * firstDx +
+                        firstDy * firstDy);
+                bool matchesPending =
+                    pendingStep <=
+                    Math.Max(
+                        42f,
+                        diagonal *
+                        PendingMatchDiagonalRatio);
+                bool continuesDirection = false;
+
+                if (firstStep > 1f &&
+                    pendingStep > 1f &&
+                    pendingStep <=
+                    diagonal *
+                    MaximumConfirmedStepDiagonalRatio)
+                {
+                    float directionCosine =
+                        (firstDx * pendingDx +
+                         firstDy * pendingDy) /
+                        (firstStep * pendingStep);
+                    continuesDirection =
+                        directionCosine >= 0.15f;
+                }
+
+                if (matchesPending ||
+                    continuesDirection)
+                {
+                    ClearPendingJump();
+                    return true;
+                }
+            }
+
+            pendingJumpPoint = candidate;
+            pendingJumpSeenAt = now;
+            return false;
+        }
+
+        private void ClearPendingJump()
+        {
+            pendingJumpPoint = null;
+            pendingJumpSeenAt = DateTime.MinValue;
         }
 
         private void UpdateMotion(
