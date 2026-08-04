@@ -1,5 +1,17 @@
 # 版本紀錄
 
+## V1.5.10 Locked Yellow Tracking Test
+
+- Add explicit searching and locked marker states.
+- Require connected red-tube and yellow-tip validation only for initial acquisition and true-loss reacquisition.
+- After lock, track compact yellow candidates inside the velocity-predicted ROI without periodically requiring red geometry.
+- Keep red support as a candidate scoring bonus while locked.
+- Preserve prediction-distance ranking and two-frame fast-jump confirmation to prevent background yellow hijacking.
+- Retain the lock through short misses and release it only after 450 ms of continuous yellow loss.
+- Clear position, velocity, pending-jump, and color-pair state when the lock is released.
+- Extend the WinForms tracking and stroke continuity grace to 500 ms so a recovered marker reconnects the trajectory.
+- Preserve high-resolution geometry scaling, adaptive overlay sizing, CUDA/CPU fallback, scoring, and animation.
+
 ## V1.5.9 High-Resolution Tolerance Test
 
 - Stop multiplying yellow and red connected-component minimum sample counts by total camera pixel area.
