@@ -1,5 +1,16 @@
 # 版本紀錄
 
+## V1.5.8 Resolution-Adaptive Tracking Test
+
+- Use the same 1.6-megapixel reference scale for both rendering and marker tracking.
+- Scale yellow hold tolerance, reacquisition radius, jitter dead zone, start movement distance, interpolation spacing, and fast-motion threshold.
+- Scale elapsed-time jump allowance, maximum jump distance, and maximum marker speed in pixels per second.
+- Scale predictive ROI minimum and maximum radius for higher-resolution frames.
+- Scale red-tube search radius, yellow-to-red contact distance, minimum tube span, and maximum yellow component size.
+- Scale connected-component sample requirements by image area to keep noise rejection consistent.
+- Normalize candidate area and distance scores so 5-megapixel candidates are ranked like their 1.6-megapixel equivalents.
+- Preserve V1.5.6 fast-motion anti-jump, V1.5.7 adaptive overlay sizing, CUDA/CPU fallback, scoring, and animation.
+
 ## V1.5.7 Resolution-Adaptive Overlay Test
 
 - Use the 1.6-megapixel camera output as the visual-size reference.
