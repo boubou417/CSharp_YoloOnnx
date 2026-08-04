@@ -1709,7 +1709,20 @@ namespace CSharp_YoloOnnx
                     : lastConsumedRightHandAt;
 
             if (snapshot.CompletedAt <= lastConsumed)
+            {
+                if (snapshot.Detected &&
+                    snapshot.Result != null &&
+                    (DateTime.Now -
+                        snapshot.CompletedAt)
+                        .TotalMilliseconds <
+                    FingertipMarkerVisibleMs)
+                {
+                    result = snapshot.Result;
+                    return true;
+                }
+
                 return false;
+            }
 
             if (hand == DrawingHand.Left)
                 lastConsumedLeftHandAt =
@@ -1852,13 +1865,16 @@ namespace CSharp_YoloOnnx
                         0);
                 });
             }
-            catch
+            catch (Exception ex)
             {
                 inferenceFrame?.Dispose();
+                latestHandInferenceResult = "ERROR";
+                Debug.WriteLine(
+                    "Unable to queue hand inference: " +
+                    ex);
                 Interlocked.Exchange(
                     ref handInferenceBusy,
                     0);
-                throw;
             }
         }
 
