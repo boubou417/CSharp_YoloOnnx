@@ -87,6 +87,8 @@ namespace CSharp_YoloOnnx
                     return false;
 
                 DateTime now = DateTime.UtcNow;
+                float resolutionScale =
+                    GetResolutionScale(frame.Size);
                 PointF prediction = PointF.Empty;
                 bool hasPrediction =
                     previousPoint.HasValue &&
@@ -115,12 +117,18 @@ namespace CSharp_YoloOnnx
                             velocityPixelsPerMillisecond.X +
                             velocityPixelsPerMillisecond.Y *
                             velocityPixelsPerMillisecond.Y);
+                    float minimumRoiRadius =
+                        MinimumRoiRadius *
+                        resolutionScale;
+                    float maximumRoiRadius =
+                        MaximumRoiRadius *
+                        resolutionScale;
                     float radius =
                         Math.Max(
-                            MinimumRoiRadius,
+                            minimumRoiRadius,
                             Math.Min(
-                                MaximumRoiRadius,
-                                MinimumRoiRadius +
+                                maximumRoiRadius,
+                                minimumRoiRadius +
                                 speed *
                                 (float)elapsedMilliseconds *
                                 RoiMotionExpansion));
@@ -141,6 +149,7 @@ namespace CSharp_YoloOnnx
                         RoiSampleStep,
                         MinimumRoiSamples,
                         prediction,
+                        resolutionScale,
                         lastRedYellowPairSeenAt != DateTime.MinValue &&
                         (now - lastRedYellowPairSeenAt).TotalMilliseconds <=
                         RedOcclusionGraceMs,
@@ -182,6 +191,7 @@ namespace CSharp_YoloOnnx
                     FullFrameSampleStep,
                     MinimumFullFrameSamples,
                     reference,
+                    resolutionScale,
                     false,
                     now,
                     out tip,
@@ -218,6 +228,7 @@ namespace CSharp_YoloOnnx
             int sampleStep,
             int minimumSamples,
             PointF referencePoint,
+            float resolutionScale,
             bool allowYellowOnly,
             DateTime now,
             out PointF tip,
@@ -225,6 +236,10 @@ namespace CSharp_YoloOnnx
         {
             tip = PointF.Empty;
             bounds = RectangleF.Empty;
+            minimumSamples =
+                ScaleSampleCount(
+                    minimumSamples,
+                    resolutionScale);
 
             if (searchRegion.Width <= 0 ||
                 searchRegion.Height <= 0)
@@ -355,8 +370,12 @@ namespace CSharp_YoloOnnx
 
                 // Large yellow/orange surfaces are background, not the
                 // compact tape marker fitted to the red tube.
-                if (componentWidth > MaximumYellowComponentSpan ||
-                    componentHeight > MaximumYellowComponentSpan)
+                float maximumYellowSpan =
+                    MaximumYellowComponentSpan *
+                    resolutionScale;
+
+                if (componentWidth > maximumYellowSpan ||
+                    componentHeight > maximumYellowSpan)
                 {
                     continue;
                 }
@@ -393,7 +412,8 @@ namespace CSharp_YoloOnnx
                         sampleStep == RoiSampleStep
                             ? MinimumRedRoiSamples
                             : MinimumRedFullFrameSamples,
-                        sampleStep);
+                        sampleStep,
+                        resolutionScale);
 
                 if (!hasRedSupport && !allowYellowOnly)
                     continue;
@@ -407,14 +427,26 @@ namespace CSharp_YoloOnnx
                 bool hasReference =
                     referencePoint.X != 0f ||
                     referencePoint.Y != 0f;
+                float areaScale =
+                    Math.Max(
+                        0.25f,
+                        resolutionScale *
+                        resolutionScale);
+                float normalizedCount =
+                    count / areaScale;
+                float normalizedDistance =
+                    distance /
+                    Math.Max(0.5f, resolutionScale);
                 float score =
-                    count -
-                    distance *
+                    normalizedCount -
+                    normalizedDistance *
                     (hasReference
                         ? PreviousPositionWeight
                         : 0f) +
                     (hasRedSupport
-                        ? Math.Max(12f, count * 0.25f)
+                        ? Math.Max(
+                            12f,
+                            normalizedCount * 0.25f)
                         : -12f);
 
                 if (score <= bestScore)
@@ -471,15 +503,29 @@ namespace CSharp_YoloOnnx
             RectangleF yellowBounds,
             PointF yellowCenter,
             int minimumSamples,
-            int sampleStep)
+            int sampleStep,
+            float resolutionScale)
         {
+            minimumSamples =
+                ScaleSampleCount(
+                    minimumSamples,
+                    resolutionScale);
+            float redSearchRadius =
+                RedSearchRadius *
+                resolutionScale;
+            float redContactDistance =
+                RedContactDistance *
+                resolutionScale;
+            float minimumRedTubeSpan =
+                MinimumRedTubeSpan *
+                resolutionScale;
             Rectangle region = Rectangle.Intersect(
                 new Rectangle(0, 0, frameSize.Width, frameSize.Height),
                 Rectangle.FromLTRB(
-                    (int)Math.Floor(yellowBounds.Left - RedSearchRadius),
-                    (int)Math.Floor(yellowBounds.Top - RedSearchRadius),
-                    (int)Math.Ceiling(yellowBounds.Right + RedSearchRadius),
-                    (int)Math.Ceiling(yellowBounds.Bottom + RedSearchRadius)));
+                    (int)Math.Floor(yellowBounds.Left - redSearchRadius),
+                    (int)Math.Floor(yellowBounds.Top - redSearchRadius),
+                    (int)Math.Ceiling(yellowBounds.Right + redSearchRadius),
+                    (int)Math.Ceiling(yellowBounds.Bottom + redSearchRadius)));
 
             if (region.Width <= 0 || region.Height <= 0)
                 return false;
@@ -597,9 +643,9 @@ namespace CSharp_YoloOnnx
 
                 if (count < minimumSamples ||
                     nearestSquared >
-                    RedContactDistance * RedContactDistance ||
+                    redContactDistance * redContactDistance ||
                     farthestSquared <
-                    MinimumRedTubeSpan * MinimumRedTubeSpan)
+                    minimumRedTubeSpan * minimumRedTubeSpan)
                 {
                     continue;
                 }
@@ -885,6 +931,40 @@ namespace CSharp_YoloOnnx
 
             previousPoint = point;
             previousPointSeenAt = now;
+        }
+
+        private static float GetResolutionScale(
+            Size frameSize)
+        {
+            const double referencePixelCount = 1600000d;
+            double pixelCount =
+                Math.Max(
+                    1d,
+                    (double)frameSize.Width *
+                    frameSize.Height);
+            float scale =
+                (float)Math.Sqrt(
+                    pixelCount /
+                    referencePixelCount);
+
+            return Math.Max(
+                0.75f,
+                Math.Min(2.5f, scale));
+        }
+
+        private static int ScaleSampleCount(
+            int baseCount,
+            float resolutionScale)
+        {
+            float areaScale =
+                resolutionScale *
+                resolutionScale;
+
+            return Math.Max(
+                3,
+                (int)Math.Round(
+                    baseCount *
+                    areaScale));
         }
 
         private static Rectangle IntersectWithFrame(
