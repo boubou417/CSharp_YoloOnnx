@@ -282,7 +282,7 @@ namespace CSharp_YoloOnnx
         {
             InitializeComponent();
 
-            Text = "CSharp YOLO ONNX V1.5.5 Connected Red-Yellow Pointer";
+            Text = "CSharp YOLO ONNX V1.5.6 Fast Motion Anti-Jump";
             panelToolBar.Dock = DockStyle.Top;
             panelToolBar.Height = 40;
             panelStatusBar.Dock = DockStyle.Bottom;
@@ -313,7 +313,7 @@ namespace CSharp_YoloOnnx
             string modelPath = "yolov8n-pose.onnx";
             InitializeYoloSession(modelPath);
             Text =
-                "CSharp YOLO ONNX V1.5.5 Connected Red-Yellow Pointer | " +
+                "CSharp YOLO ONNX V1.5.6 Fast Motion Anti-Jump | " +
                 yoloExecutionProvider;
         }
 
