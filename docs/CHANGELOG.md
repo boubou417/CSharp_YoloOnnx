@@ -1,5 +1,16 @@
 # 版本紀錄
 
+## V1.5.9 High-Resolution Tolerance Test
+
+- Stop multiplying yellow and red connected-component minimum sample counts by total camera pixel area.
+- Restore the proven 1.6-megapixel sample requirements for 5-megapixel and binned camera outputs.
+- Continue scaling geometric distances, marker-size limits, red search radius, contact distance, and predictive ROI by resolution.
+- Extend confirmed red-yellow tracking's temporary yellow-only allowance from 80 ms to 200 ms inside the predicted ROI.
+- Extend raw tracking-loss lock retention from 120 ms to 240 ms.
+- Extend the trajectory stroke-break delay from 300 ms to 450 ms so brief high-resolution misses can reconnect through interpolation.
+- Keep strict red-yellow pairing for initial acquisition and full-frame reacquisition to protect against background false positives.
+- Preserve fast-motion anti-jump, adaptive overlay sizing, CUDA/CPU fallback, scoring, and animation.
+
 ## V1.5.8 Resolution-Adaptive Tracking Test
 
 - Use the same 1.6-megapixel reference scale for both rendering and marker tracking.
