@@ -62,6 +62,11 @@ namespace CSharp_YoloOnnx
         const float MinimumPoseHandKeypointScore = 0.35f;
         const float MinimumIdleHandPresence = 0.35f;
         const float MinimumDrawingHandPresence = 0.45f;
+        const int YellowStartHoldMs = 600;
+        const int YellowFinishHoldMs = 900;
+        const int YellowMissingBreakMs = 300;
+        const float YellowHoldRadius = 14f;
+        const float YellowStartMoveDistance = 40f;
 
         DateTime drawingFinishedAt = DateTime.MinValue;
         DateTime fingertipMissingSince = DateTime.MinValue;
@@ -82,6 +87,15 @@ namespace CSharp_YoloOnnx
         Label lblSimilarityScore;
         Label lblAirDrawStatus;
         FingertipTracker fingertipTracker;
+        readonly YellowTipTracker yellowTipTracker =
+            new YellowTipTracker();
+        readonly bool yellowTipMode = true;
+        DateTime yellowHoldStartedAt = DateTime.MinValue;
+        DateTime yellowMissingSince = DateTime.MinValue;
+        PointF? yellowHoldAnchor;
+        PointF? yellowDrawingStartPoint;
+        RectangleF displayedYellowTipBounds;
+        bool yellowMovedAfterStart;
         PointF? lastFingertipPoint;
         PointF? displayedFingertipPoint;
         PointF? displayedThumbPoint;
@@ -250,7 +264,7 @@ namespace CSharp_YoloOnnx
         {
             InitializeComponent();
 
-            Text = "CSharp YOLO ONNX V1.4 Async Hand Tracking";
+            Text = "CSharp YOLO ONNX V1.5 Yellow Tip Tracking";
             panelToolBar.Dock = DockStyle.Top;
             panelToolBar.Height = 40;
             panelStatusBar.Dock = DockStyle.Bottom;
@@ -260,7 +274,8 @@ namespace CSharp_YoloOnnx
             pBox.SizeMode = PictureBoxSizeMode.Zoom;
             InitializeAirDrawControls();
             TryLoadDefaultTemplate();
-            InitializeFingertipTracker();
+            if (!yellowTipMode)
+                InitializeFingertipTracker();
             InitializeMagicAnimation();
             FormClosed += Form1_FormClosed;
 
@@ -280,7 +295,7 @@ namespace CSharp_YoloOnnx
             string modelPath = "yolov8n-pose.onnx";
             InitializeYoloSession(modelPath);
             Text =
-                "CSharp YOLO ONNX V1.4 Async Hand Tracking | " +
+                "CSharp YOLO ONNX V1.5 Yellow Tip Tracking | " +
                 yoloExecutionProvider;
         }
 
@@ -587,7 +602,7 @@ namespace CSharp_YoloOnnx
             drawingStatusText =
                 "比對圖：" +
                 Path.GetFileName(templateImagePath) +
-                "｜左右手張掌開始";
+                "｜黃色筆尖停留開始";
         }
 
         private void btnSelectTemplate_Click(object sender, EventArgs e)
@@ -670,6 +685,9 @@ namespace CSharp_YoloOnnx
                     0);
                 DisposePendingPoseImage();
                 ResetPerformanceDiagnostics();
+                yellowTipTracker.Reset();
+                ResetYellowHold();
+                yellowMissingSince = DateTime.MinValue;
 
                 poseInferenceThread =
                     new Thread(ThreadPoseInference)
@@ -1157,6 +1175,12 @@ namespace CSharp_YoloOnnx
 
         private void UpdateGame(Detection main, Bitmap frame)
         {
+            if (yellowTipMode)
+            {
+                UpdateYellowTipGame(frame);
+                return;
+            }
+
             if (gameState == GameState.Finished)
             {
                 if (drawingFinishedAt != DateTime.MinValue &&
@@ -1307,16 +1331,202 @@ namespace CSharp_YoloOnnx
                     break;
 
                 case GameState.Finished:
-                    break;
-
                 case GameState.Countdown:
-
-                    break;
-
                 case GameState.Scoring:
-
                     break;
             }
+        }
+
+        private void UpdateYellowTipGame(Bitmap frame)
+        {
+            DateTime now = DateTime.Now;
+
+            if (gameState == GameState.Finished)
+            {
+                if (drawingFinishedAt != DateTime.MinValue &&
+                    (now - drawingFinishedAt).TotalMilliseconds >=
+                        FinishedDisplayMs)
+                {
+                    gameState = GameState.Idle;
+                    handTrail.Clear();
+                    drawingPoints.Clear();
+                    drawingPointTimes.Clear();
+                    drawingStrokeStartIndices.Clear();
+                    drawingStrokeStartPending = true;
+                    lastFingertipPoint = null;
+                    displayedFingertipPoint = null;
+                    displayedThumbPoint = null;
+                    displayedFingertipPresence = 0f;
+                    yellowDrawingStartPoint = null;
+                    yellowMovedAfterStart = false;
+                    yellowMissingSince = DateTime.MinValue;
+                    ResetYellowHold();
+                    yellowTipTracker.Reset();
+                    drawingStatusText = GetIdleInstruction();
+                }
+
+                return;
+            }
+
+            if (gameState == GameState.Scoring)
+                return;
+
+            PointF tip;
+            RectangleF bounds;
+            bool detected =
+                yellowTipTracker.TryDetect(
+                    frame,
+                    out tip,
+                    out bounds);
+
+            if (!detected)
+            {
+                ResetYellowHold();
+
+                if (yellowMissingSince == DateTime.MinValue)
+                    yellowMissingSince = now;
+
+                if ((now - yellowMissingSince).TotalMilliseconds >=
+                    YellowMissingBreakMs)
+                {
+                    displayedFingertipPoint = null;
+                    displayedYellowTipBounds = RectangleF.Empty;
+
+                    if (gameState == GameState.Drawing)
+                    {
+                        drawingStrokeStartPending = true;
+                        lastFingertipPoint = null;
+                    }
+                }
+
+                drawingStatusText =
+                    gameState == GameState.Drawing
+                        ? "正在尋找黃色筆尖｜請讓黃色膠帶朝向相機"
+                        : "正在尋找黃色筆尖｜找到後停留 0.6 秒開始";
+                return;
+            }
+
+            yellowMissingSince = DateTime.MinValue;
+            displayedFingertipPoint = tip;
+            displayedThumbPoint = null;
+            displayedFingertipPresence = 1f;
+            displayedDrawingHand = DrawingHand.None;
+            displayedYellowTipBounds = bounds;
+            lastFingertipSeenAt = now;
+
+            if (gameState == GameState.Idle)
+            {
+                UpdateYellowHold(tip, now);
+
+                int progress = GetProgressPercent(
+                    yellowHoldStartedAt,
+                    YellowStartHoldMs,
+                    now);
+                drawingStatusText =
+                    "黃色筆尖開始 " +
+                    progress +
+                    "%｜保持不動";
+
+                if (progress >= 100)
+                    StartYellowTipDrawing(tip);
+
+                return;
+            }
+
+            if (gameState != GameState.Drawing)
+                return;
+
+            if (!yellowMovedAfterStart)
+            {
+                PointF origin =
+                    yellowDrawingStartPoint ?? tip;
+                float dx = tip.X - origin.X;
+                float dy = tip.Y - origin.Y;
+
+                if (dx * dx + dy * dy >=
+                    YellowStartMoveDistance *
+                    YellowStartMoveDistance)
+                {
+                    yellowMovedAfterStart = true;
+                    drawingStrokeStartPending = true;
+                    ResetYellowHold();
+                    AddDrawingPoint(tip);
+                }
+                else
+                {
+                    drawingStatusText =
+                        "開始成功｜移動黃色筆尖開始畫圖";
+                }
+
+                return;
+            }
+
+            AddDrawingPoint(tip);
+            UpdateYellowHold(tip, now);
+            int finishProgress = GetProgressPercent(
+                yellowHoldStartedAt,
+                YellowFinishHoldMs,
+                now);
+
+            if (finishProgress >= 100)
+            {
+                DateTime holdStartedAt =
+                    yellowHoldStartedAt;
+                StopDrawing(holdStartedAt, 0);
+                ResetYellowHold();
+                return;
+            }
+
+            drawingStatusText =
+                finishProgress > 0
+                    ? "停留完成 " +
+                      finishProgress +
+                      "%｜移動可取消"
+                    : "繪圖中（黃色筆尖）｜畫完停留 0.9 秒完成";
+        }
+
+        private void StartYellowTipDrawing(PointF tip)
+        {
+            StartDrawing(DrawingHand.None, null);
+            waitingForOpenPalmReleaseAfterStart = false;
+            yellowDrawingStartPoint = tip;
+            yellowMovedAfterStart = false;
+            yellowMissingSince = DateTime.MinValue;
+            displayedFingertipPoint = tip;
+            displayedFingertipPresence = 1f;
+            ResetYellowHold();
+            drawingStatusText =
+                "開始成功｜移動黃色筆尖開始畫圖";
+        }
+
+        private void UpdateYellowHold(
+            PointF point,
+            DateTime now)
+        {
+            if (!yellowHoldAnchor.HasValue)
+            {
+                yellowHoldAnchor = point;
+                yellowHoldStartedAt = now;
+                return;
+            }
+
+            float dx =
+                point.X - yellowHoldAnchor.Value.X;
+            float dy =
+                point.Y - yellowHoldAnchor.Value.Y;
+
+            if (dx * dx + dy * dy >
+                YellowHoldRadius * YellowHoldRadius)
+            {
+                yellowHoldAnchor = point;
+                yellowHoldStartedAt = now;
+            }
+        }
+
+        private void ResetYellowHold()
+        {
+            yellowHoldAnchor = null;
+            yellowHoldStartedAt = DateTime.MinValue;
         }
 
         private void UpdateIdleStartGesture(
@@ -1537,7 +1747,7 @@ namespace CSharp_YoloOnnx
 
         private string GetIdleInstruction()
         {
-            return "左右手皆可｜張開手掌 0.6 秒開始";
+            return "黃色筆尖停留 0.6 秒開始｜畫完停留 0.9 秒完成";
         }
 
         private string GetHandDisplayName(DrawingHand hand)
@@ -2716,6 +2926,74 @@ namespace CSharp_YoloOnnx
             }
 
             PointF point = displayedFingertipPoint.Value;
+
+            if (yellowTipMode)
+            {
+                using (Pen markerPen = new Pen(Color.Gold, 4f))
+                using (Pen boundsPen = new Pen(
+                    Color.FromArgb(180, 255, 215, 0),
+                    2f))
+                using (Brush centerBrush =
+                    new SolidBrush(Color.White))
+                using (Font markerFont = new Font(
+                    "Microsoft JhengHei UI",
+                    11f,
+                    FontStyle.Bold))
+                {
+                    graphics.DrawRectangle(
+                        boundsPen,
+                        displayedYellowTipBounds.X,
+                        displayedYellowTipBounds.Y,
+                        displayedYellowTipBounds.Width,
+                        displayedYellowTipBounds.Height);
+                    graphics.DrawEllipse(
+                        markerPen,
+                        point.X - 12f,
+                        point.Y - 12f,
+                        24f,
+                        24f);
+                    graphics.FillEllipse(
+                        centerBrush,
+                        point.X - 3f,
+                        point.Y - 3f,
+                        6f,
+                        6f);
+                    graphics.DrawString(
+                        "黃色筆尖",
+                        markerFont,
+                        Brushes.Gold,
+                        point.X + 15f,
+                        point.Y - 14f);
+
+                    int delay =
+                        gameState == GameState.Idle
+                            ? YellowStartHoldMs
+                            : YellowFinishHoldMs;
+                    int progress = GetProgressPercent(
+                        yellowHoldStartedAt,
+                        delay,
+                        DateTime.Now);
+
+                    if (progress > 0)
+                    {
+                        using (Pen progressPen =
+                            new Pen(Color.Lime, 4f))
+                        {
+                            graphics.DrawArc(
+                                progressPen,
+                                point.X - 17f,
+                                point.Y - 17f,
+                                34f,
+                                34f,
+                                -90f,
+                                360f * progress / 100f);
+                        }
+                    }
+                }
+
+                return;
+            }
+
             float gestureProgress;
             bool pinchGesture;
             bool showGestureProgress =
