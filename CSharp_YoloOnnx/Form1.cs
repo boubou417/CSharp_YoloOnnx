@@ -65,7 +65,12 @@ namespace CSharp_YoloOnnx
         const int YellowStartHoldMs = 600;
         const int YellowFinishHoldMs = 900;
         const int YellowMissingBreakMs = 300;
-        const float YellowHoldRadius = 14f;
+        const int YellowReacquireConfirmMs = 200;
+        const float YellowHoldRadius = 30f;
+        const float YellowReacquireRadius = 36f;
+        const float YellowMaximumFrameJump = 160f;
+        const float YellowJitterDeadZone = 4f;
+        const float YellowPositionSmoothing = 0.45f;
         const float YellowStartMoveDistance = 40f;
 
         DateTime drawingFinishedAt = DateTime.MinValue;
@@ -96,6 +101,10 @@ namespace CSharp_YoloOnnx
         PointF? yellowDrawingStartPoint;
         RectangleF displayedYellowTipBounds;
         bool yellowMovedAfterStart;
+        bool yellowTrackingConfirmed;
+        DateTime yellowCandidateStartedAt = DateTime.MinValue;
+        PointF? yellowCandidateAnchor;
+        PointF? filteredYellowTip;
         PointF? lastFingertipPoint;
         PointF? displayedFingertipPoint;
         PointF? displayedThumbPoint;
@@ -264,7 +273,7 @@ namespace CSharp_YoloOnnx
         {
             InitializeComponent();
 
-            Text = "CSharp YOLO ONNX V1.5 Yellow Tip Tracking";
+            Text = "CSharp YOLO ONNX V1.5.1 Stable Yellow Tip";
             panelToolBar.Dock = DockStyle.Top;
             panelToolBar.Height = 40;
             panelStatusBar.Dock = DockStyle.Bottom;
@@ -295,7 +304,7 @@ namespace CSharp_YoloOnnx
             string modelPath = "yolov8n-pose.onnx";
             InitializeYoloSession(modelPath);
             Text =
-                "CSharp YOLO ONNX V1.5 Yellow Tip Tracking | " +
+                "CSharp YOLO ONNX V1.5.1 Stable Yellow Tip | " +
                 yoloExecutionProvider;
         }
 
@@ -685,9 +694,7 @@ namespace CSharp_YoloOnnx
                     0);
                 DisposePendingPoseImage();
                 ResetPerformanceDiagnostics();
-                yellowTipTracker.Reset();
-                ResetYellowHold();
-                yellowMissingSince = DateTime.MinValue;
+                ResetYellowTracking();
 
                 poseInferenceThread =
                     new Thread(ThreadPoseInference)
@@ -1360,8 +1367,7 @@ namespace CSharp_YoloOnnx
                     yellowDrawingStartPoint = null;
                     yellowMovedAfterStart = false;
                     yellowMissingSince = DateTime.MinValue;
-                    ResetYellowHold();
-                    yellowTipTracker.Reset();
+                    ResetYellowTracking();
                     drawingStatusText = GetIdleInstruction();
                 }
 
@@ -1373,11 +1379,14 @@ namespace CSharp_YoloOnnx
 
             PointF tip;
             RectangleF bounds;
+            bool candidateVisible;
             bool detected =
-                yellowTipTracker.TryDetect(
+                TryGetStableYellowTip(
                     frame,
+                    now,
                     out tip,
-                    out bounds);
+                    out bounds,
+                    out candidateVisible);
 
             if (!detected)
             {
@@ -1400,9 +1409,11 @@ namespace CSharp_YoloOnnx
                 }
 
                 drawingStatusText =
-                    gameState == GameState.Drawing
-                        ? "正在尋找黃色筆尖｜請讓黃色膠帶朝向相機"
-                        : "正在尋找黃色筆尖｜找到後停留 0.6 秒開始";
+                    candidateVisible
+                        ? "確認黃色筆尖中｜請短暫保持穩定"
+                        : gameState == GameState.Drawing
+                            ? "黃色筆尖離開畫面｜軌跡已暫停"
+                            : "正在尋找黃色筆尖｜找到後停留 0.6 秒開始";
                 return;
             }
 
@@ -1485,6 +1496,114 @@ namespace CSharp_YoloOnnx
                     : "繪圖中（黃色筆尖）｜畫完停留 0.9 秒完成";
         }
 
+        private bool TryGetStableYellowTip(
+            Bitmap frame,
+            DateTime now,
+            out PointF tip,
+            out RectangleF bounds,
+            out bool candidateVisible)
+        {
+            tip = PointF.Empty;
+            bounds = RectangleF.Empty;
+            candidateVisible = false;
+            PointF rawTip;
+            RectangleF rawBounds;
+
+            if (!yellowTipTracker.TryDetect(
+                frame,
+                out rawTip,
+                out rawBounds))
+            {
+                yellowTrackingConfirmed = false;
+                yellowCandidateStartedAt = DateTime.MinValue;
+                yellowCandidateAnchor = null;
+                filteredYellowTip = null;
+                return false;
+            }
+
+            candidateVisible = true;
+
+            if (!yellowTrackingConfirmed)
+            {
+                if (!yellowCandidateAnchor.HasValue)
+                {
+                    yellowCandidateAnchor = rawTip;
+                    yellowCandidateStartedAt = now;
+                    return false;
+                }
+
+                float candidateDx =
+                    rawTip.X - yellowCandidateAnchor.Value.X;
+                float candidateDy =
+                    rawTip.Y - yellowCandidateAnchor.Value.Y;
+
+                if (candidateDx * candidateDx +
+                    candidateDy * candidateDy >
+                    YellowReacquireRadius *
+                    YellowReacquireRadius)
+                {
+                    yellowCandidateAnchor = rawTip;
+                    yellowCandidateStartedAt = now;
+                    return false;
+                }
+
+                if ((now - yellowCandidateStartedAt)
+                        .TotalMilliseconds <
+                    YellowReacquireConfirmMs)
+                {
+                    return false;
+                }
+
+                yellowTrackingConfirmed = true;
+                filteredYellowTip = rawTip;
+                yellowCandidateStartedAt = DateTime.MinValue;
+                yellowCandidateAnchor = null;
+            }
+            else if (filteredYellowTip.HasValue)
+            {
+                PointF previous = filteredYellowTip.Value;
+                float dx = rawTip.X - previous.X;
+                float dy = rawTip.Y - previous.Y;
+                float distanceSquared = dx * dx + dy * dy;
+
+                if (distanceSquared >
+                    YellowMaximumFrameJump *
+                    YellowMaximumFrameJump)
+                {
+                    yellowTrackingConfirmed = false;
+                    yellowCandidateAnchor = rawTip;
+                    yellowCandidateStartedAt = now;
+                    filteredYellowTip = null;
+                    return false;
+                }
+
+                if (distanceSquared <=
+                    YellowJitterDeadZone *
+                    YellowJitterDeadZone)
+                {
+                    rawTip = previous;
+                }
+                else
+                {
+                    rawTip = new PointF(
+                        previous.X +
+                        dx * YellowPositionSmoothing,
+                        previous.Y +
+                        dy * YellowPositionSmoothing);
+                }
+
+                filteredYellowTip = rawTip;
+            }
+            else
+            {
+                filteredYellowTip = rawTip;
+            }
+
+            tip = filteredYellowTip.Value;
+            bounds = rawBounds;
+            return true;
+        }
+
         private void StartYellowTipDrawing(PointF tip)
         {
             StartDrawing(DrawingHand.None, null);
@@ -1527,6 +1646,18 @@ namespace CSharp_YoloOnnx
         {
             yellowHoldAnchor = null;
             yellowHoldStartedAt = DateTime.MinValue;
+        }
+
+        private void ResetYellowTracking()
+        {
+            yellowTipTracker.Reset();
+            yellowTrackingConfirmed = false;
+            yellowCandidateStartedAt = DateTime.MinValue;
+            yellowCandidateAnchor = null;
+            filteredYellowTip = null;
+            yellowMissingSince = DateTime.MinValue;
+            displayedYellowTipBounds = RectangleF.Empty;
+            ResetYellowHold();
         }
 
         private void UpdateIdleStartGesture(
