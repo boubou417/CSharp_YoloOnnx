@@ -1,5 +1,16 @@
 # 版本紀錄
 
+## V1.5 Yellow Tip Tracking Test
+
+- Replace fingertip landmark drawing with direct yellow marker tracking.
+- Scan every third camera pixel and select the largest connected yellow component.
+- Prefer candidates near the previous marker position to reduce jumps to background objects.
+- Start drawing after the yellow tip remains still for 0.6 seconds.
+- Require movement after starting, then finish after the tip remains still for 0.9 seconds.
+- Trim the stationary finishing tail before saving and scoring the trajectory.
+- Keep person boxes, skeleton rendering, trajectory saving, similarity scoring, and magic animation.
+- Run yellow tracking independently of YOLO pose and TensorFlow Lite hand inference.
+
 ## Async Hand Landmark Performance Test
 
 - Move TensorFlow Lite hand-landmark invocation from the camera/display thread to a single background task.
