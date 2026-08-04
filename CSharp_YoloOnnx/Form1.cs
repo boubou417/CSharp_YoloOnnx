@@ -3293,10 +3293,10 @@ namespace CSharp_YoloOnnx
                     18f * overlayScale);
                 graphics.FillEllipse(
                     center,
-                    point.X - 3f,
-                    point.Y - 3f,
-                    6f,
-                    6f);
+                    point.X - 3f * overlayScale,
+                    point.Y - 3f * overlayScale,
+                    6f * overlayScale,
+                    6f * overlayScale);
                 graphics.DrawString(
                     GetHandDisplayName(displayedDrawingHand) +
                     "食指 " +
