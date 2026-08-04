@@ -1,5 +1,16 @@
 # 版本紀錄
 
+## V1.5.7 Resolution-Adaptive Overlay Test
+
+- Use the 1.6-megapixel camera output as the visual-size reference.
+- Compute an overlay scale from the actual frame pixel count and clamp it between 0.75 and 2.5.
+- Keep trail thickness visually consistent when 5-megapixel frames are reduced to the same WinForms display area.
+- Scale the yellow-tip marker, center dot, bounding box stroke, label font, and start/finish progress ring.
+- Scale fingertip and thumb markers, pinch line, gesture progress ring, confidence text, and offsets.
+- Scale person boxes, skeleton glow/core lines, joint markers, eye and torso lines, and the HELLO overlay.
+- Leave WinForms controls and the external similarity-score panel unchanged.
+- Preserve V1.5.6 fast-motion anti-jump, connected red-yellow validation, CUDA/CPU fallback, scoring, and animation.
+
 ## V1.5.6 Fast Motion Anti-Jump Test
 
 - Hold a suspicious large marker jump as provisional instead of adding it to the trajectory immediately.
