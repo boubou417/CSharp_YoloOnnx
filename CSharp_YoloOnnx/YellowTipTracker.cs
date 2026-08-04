@@ -20,15 +20,20 @@ namespace CSharp_YoloOnnx
         private const float MaximumRoiRadius = 420f;
         private const float RoiMotionExpansion = 1.8f;
         private const float PreviousPositionWeight = 0.02f;
-        private const int RedOcclusionGraceMs = 150;
-        private const float RedSearchRadius = 110f;
-        private const float RedContactDistance = 38f;
-        private const int MinimumRedFullFrameSamples = 5;
-        private const int MinimumRedRoiSamples = 18;
+        private const int RedOcclusionGraceMs = 80;
+        private const float RedSearchRadius = 60f;
+        private const float RedContactDistance = 20f;
+        private const int MinimumRedFullFrameSamples = 4;
+        private const int MinimumRedRoiSamples = 12;
+        private const float MinimumRedTubeSpan = 24f;
+        private const float MaximumRedTubeFillRatio = 0.62f;
+        private const float MinimumRedTubeElongation = 1.8f;
         private const float MaximumYellowComponentSpan = 180f;
 
         private bool[] mask;
         private int[] queue;
+        private bool[] redMask;
+        private int[] redQueue;
         private PointF? previousPoint;
         private PointF velocityPixelsPerMillisecond;
         private DateTime previousPointSeenAt = DateTime.MinValue;
@@ -240,6 +245,7 @@ namespace CSharp_YoloOnnx
             int bestMinY = 0;
             int bestMaxX = 0;
             int bestMaxY = 0;
+            bool bestHasRedSupport = false;
 
             for (int index = 0;
                 index < requiredLength;
@@ -352,8 +358,6 @@ namespace CSharp_YoloOnnx
                 if (!hasRedSupport && !allowYellowOnly)
                     continue;
 
-                if (hasRedSupport)
-                    lastRedYellowPairSeenAt = now;
                 float dx =
                     centerX - referencePoint.X;
                 float dy =
@@ -376,10 +380,16 @@ namespace CSharp_YoloOnnx
                 bestMinY = minY;
                 bestMaxX = maxX;
                 bestMaxY = maxY;
+                bestHasRedSupport = hasRedSupport;
             }
 
             if (bestCount < minimumSamples)
                 return false;
+
+            // Only the candidate actually selected as the marker may refresh
+            // the short red-tube occlusion allowance.
+            if (bestHasRedSupport)
+                lastRedYellowPairSeenAt = now;
 
             tip = new PointF(
                 searchRegion.Left +
@@ -426,55 +436,200 @@ namespace CSharp_YoloOnnx
             if (region.Width <= 0 || region.Height <= 0)
                 return false;
 
+            int width =
+                (region.Width + sampleStep - 1) / sampleStep;
+            int height =
+                (region.Height + sampleStep - 1) / sampleStep;
+            int requiredLength = width * height;
+            EnsureRedBuffers(requiredLength);
+            Array.Clear(redMask, 0, requiredLength);
             byte* scan0 = (byte*)data.Scan0.ToPointer();
-            int redSamples = 0;
-            float nearestSquared = float.MaxValue;
-            int redMinX = region.Right;
-            int redMinY = region.Bottom;
-            int redMaxX = region.Left;
-            int redMaxY = region.Top;
 
-            for (int y = region.Top; y < region.Bottom; y += sampleStep)
+            for (int gy = 0; gy < height; gy++)
             {
+                int sourceY = Math.Min(
+                    region.Bottom - 1,
+                    region.Top + gy * sampleStep);
                 byte* row =
                     data.Stride >= 0
-                        ? scan0 + y * data.Stride
+                        ? scan0 + sourceY * data.Stride
                         : scan0 +
-                          (frameSize.Height - 1 - y) *
+                          (frameSize.Height - 1 - sourceY) *
                           -data.Stride;
 
-                for (int x = region.Left; x < region.Right; x += sampleStep)
+                for (int gx = 0; gx < width; gx++)
                 {
-                    byte* pixel = row + x * bytesPerPixel;
-
-                    if (!IsRedTube(pixel[2], pixel[1], pixel[0]))
-                        continue;
-
-                    redSamples++;
-                    redMinX = Math.Min(redMinX, x);
-                    redMinY = Math.Min(redMinY, y);
-                    redMaxX = Math.Max(redMaxX, x);
-                    redMaxY = Math.Max(redMaxY, y);
-                    float dx = x - yellowCenter.X;
-                    float dy = y - yellowCenter.Y;
-                    nearestSquared =
-                        Math.Min(nearestSquared, dx * dx + dy * dy);
+                    int sourceX = Math.Min(
+                        region.Right - 1,
+                        region.Left + gx * sampleStep);
+                    byte* pixel =
+                        row + sourceX * bytesPerPixel;
+                    redMask[gy * width + gx] =
+                        IsRedTube(
+                            pixel[2],
+                            pixel[1],
+                            pixel[0]);
                 }
             }
 
-            if (redSamples < minimumSamples ||
-                nearestSquared >
-                RedContactDistance * RedContactDistance)
+            for (int index = 0;
+                index < requiredLength;
+                index++)
             {
-                return false;
+                if (!redMask[index])
+                    continue;
+
+                int head = 0;
+                int tail = 0;
+                redQueue[tail++] = index;
+                redMask[index] = false;
+                int count = 0;
+                int minX = width;
+                int minY = height;
+                int maxX = 0;
+                int maxY = 0;
+                double sumX = 0d;
+                double sumY = 0d;
+                double sumXX = 0d;
+                double sumYY = 0d;
+                double sumXY = 0d;
+                float nearestSquared = float.MaxValue;
+                float farthestSquared = 0f;
+
+                while (head < tail)
+                {
+                    int current = redQueue[head++];
+                    int x = current % width;
+                    int y = current / width;
+                    int sourceX =
+                        region.Left + x * sampleStep;
+                    int sourceY =
+                        region.Top + y * sampleStep;
+                    count++;
+                    minX = Math.Min(minX, x);
+                    minY = Math.Min(minY, y);
+                    maxX = Math.Max(maxX, x);
+                    maxY = Math.Max(maxY, y);
+                    sumX += sourceX;
+                    sumY += sourceY;
+                    sumXX += sourceX * sourceX;
+                    sumYY += sourceY * sourceY;
+                    sumXY += sourceX * sourceY;
+                    float dx = sourceX - yellowCenter.X;
+                    float dy = sourceY - yellowCenter.Y;
+                    float distanceSquared = dx * dx + dy * dy;
+                    nearestSquared =
+                        Math.Min(nearestSquared, distanceSquared);
+                    farthestSquared =
+                        Math.Max(farthestSquared, distanceSquared);
+
+                    for (int offsetY = -1;
+                        offsetY <= 1;
+                        offsetY++)
+                    {
+                        for (int offsetX = -1;
+                            offsetX <= 1;
+                            offsetX++)
+                        {
+                            if (offsetX == 0 &&
+                                offsetY == 0)
+                            {
+                                continue;
+                            }
+
+                            EnqueueIfRed(
+                                x + offsetX,
+                                y + offsetY,
+                                width,
+                                height,
+                                ref tail);
+                        }
+                    }
+                }
+
+                if (count < minimumSamples ||
+                    nearestSquared >
+                    RedContactDistance * RedContactDistance ||
+                    farthestSquared <
+                    MinimumRedTubeSpan * MinimumRedTubeSpan)
+                {
+                    continue;
+                }
+
+                int componentWidth = maxX - minX + 1;
+                int componentHeight = maxY - minY + 1;
+                float fillRatio =
+                    count /
+                    (float)(componentWidth * componentHeight);
+
+                if (fillRatio > MaximumRedTubeFillRatio)
+                    continue;
+
+                double meanX = sumX / count;
+                double meanY = sumY / count;
+                double covarianceXX =
+                    sumXX / count - meanX * meanX;
+                double covarianceYY =
+                    sumYY / count - meanY * meanY;
+                double covarianceXY =
+                    sumXY / count - meanX * meanY;
+                double trace = covarianceXX + covarianceYY;
+                double determinant =
+                    covarianceXX * covarianceYY -
+                    covarianceXY * covarianceXY;
+                double discriminant =
+                    Math.Sqrt(
+                        Math.Max(
+                            0d,
+                            trace * trace * 0.25d -
+                            determinant));
+                double major =
+                    trace * 0.5d + discriminant;
+                double minor =
+                    Math.Max(
+                        0.25d,
+                        trace * 0.5d - discriminant);
+                double elongation = major / minor;
+
+                if (elongation < MinimumRedTubeElongation)
+                    continue;
+
+                return true;
             }
 
-            // A tube produces a visible red run. This rejects isolated red
-            // noise beside a yellow background object.
-            float redSpan = Math.Max(
-                redMaxX - redMinX,
-                redMaxY - redMinY);
-            return redSpan >= 12f;
+            return false;
+        }
+
+        private void EnsureRedBuffers(int requiredLength)
+        {
+            if (redMask == null ||
+                redMask.Length < requiredLength)
+            {
+                redMask = new bool[requiredLength];
+                redQueue = new int[requiredLength];
+            }
+        }
+
+        private void EnqueueIfRed(
+            int x,
+            int y,
+            int width,
+            int height,
+            ref int tail)
+        {
+            if (x < 0 || y < 0 ||
+                x >= width || y >= height)
+            {
+                return;
+            }
+
+            int index = y * width + x;
+
+            if (!redMask[index])
+                return;
+
+            redMask[index] = false;
+            redQueue[tail++] = index;
         }
 
         private void UpdateMotion(
@@ -606,13 +761,13 @@ namespace CSharp_YoloOnnx
             float minimum = Math.Min(r, Math.Min(g, b));
             float chroma = maximum - minimum;
 
-            if (maximum < 0.28f || chroma < 0.14f)
+            if (maximum < 0.32f || chroma < 0.18f)
                 return false;
 
             float saturation =
                 maximum <= 0f ? 0f : chroma / maximum;
 
-            if (saturation < 0.38f)
+            if (saturation < 0.48f)
                 return false;
 
             float hue;
@@ -629,7 +784,7 @@ namespace CSharp_YoloOnnx
 
             // Include the orange-red flexible tube seen under warm
             // exhibition lighting, but exclude yellow hues.
-            return hue <= 28f || hue >= 345f;
+            return hue <= 22f || hue >= 350f;
         }
 
         private static bool IsYellow(
