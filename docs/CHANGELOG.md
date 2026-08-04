@@ -1,5 +1,15 @@
 # 版本紀錄
 
+## V1.5.3 Predictive Yellow ROI Test
+
+- Predict the next marker position from smoothed inter-frame velocity.
+- Search a velocity-expanded ROI at full pixel resolution while the marker is tracked.
+- Expand the ROI from a 140-pixel radius up to 420 pixels for fast movement.
+- Fall back to the sampled full-frame search only when the predicted ROI does not contain a valid marker.
+- Join yellow pixels across small two-pixel gaps to retain thin, motion-blurred marker streaks.
+- Slightly relax brightness and saturation only inside the existing yellow hue range.
+- Keep adaptive trajectory motion limits, interpolation, skin-tone rejection, and out-of-frame pause behavior.
+
 ## V1.5.2 Fast Yellow Tip Test
 
 - Replace the fixed 160-pixel jump rejection with an elapsed-time adaptive motion allowance.
