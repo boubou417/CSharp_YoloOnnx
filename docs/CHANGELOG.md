@@ -1,5 +1,15 @@
 # 版本紀錄
 
+## V1.5.4 Red-Yellow Pointer Test
+
+- Require the compact yellow tip to have an adjacent saturated red or orange-red tube segment.
+- Reject oversized yellow/orange regions such as walls, clothing, and exhibition background objects.
+- Search for the red tube within 110 pixels of each yellow candidate and require direct proximity plus a visible red run.
+- Preserve full-resolution velocity-predicted ROI tracking for medium and fast pointer movement.
+- Allow up to 150 ms of yellow-only tracking after a confirmed red-yellow pair so brief hand occlusion or motion blur does not interrupt the trajectory.
+- Require a fresh red-yellow pair for initial acquisition and full-frame reacquisition, preventing jumps to unrelated yellow objects.
+- Keep the existing jitter tolerance, start/finish holds, out-of-frame pause, scoring, animation, and CUDA/CPU fallback.
+
 ## V1.5.3 Predictive Yellow ROI Test
 
 - Predict the next marker position from smoothed inter-frame velocity.
