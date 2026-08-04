@@ -20,18 +20,26 @@ namespace CSharp_YoloOnnx
         private const float MaximumRoiRadius = 420f;
         private const float RoiMotionExpansion = 1.8f;
         private const float PreviousPositionWeight = 0.02f;
+        private const int RedOcclusionGraceMs = 150;
+        private const float RedSearchRadius = 110f;
+        private const float RedContactDistance = 38f;
+        private const int MinimumRedFullFrameSamples = 5;
+        private const int MinimumRedRoiSamples = 18;
+        private const float MaximumYellowComponentSpan = 180f;
 
         private bool[] mask;
         private int[] queue;
         private PointF? previousPoint;
         private PointF velocityPixelsPerMillisecond;
         private DateTime previousPointSeenAt = DateTime.MinValue;
+        private DateTime lastRedYellowPairSeenAt = DateTime.MinValue;
 
         public void Reset()
         {
             previousPoint = null;
             velocityPixelsPerMillisecond = PointF.Empty;
             previousPointSeenAt = DateTime.MinValue;
+            lastRedYellowPairSeenAt = DateTime.MinValue;
         }
 
         public unsafe bool TryDetect(
@@ -117,6 +125,10 @@ namespace CSharp_YoloOnnx
                         RoiSampleStep,
                         MinimumRoiSamples,
                         prediction,
+                        lastRedYellowPairSeenAt != DateTime.MinValue &&
+                        (now - lastRedYellowPairSeenAt).TotalMilliseconds <=
+                        RedOcclusionGraceMs,
+                        now,
                         out tip,
                         out bounds))
                     {
@@ -136,6 +148,8 @@ namespace CSharp_YoloOnnx
                     FullFrameSampleStep,
                     MinimumFullFrameSamples,
                     reference,
+                    false,
+                    now,
                     out tip,
                     out bounds))
                 {
@@ -159,6 +173,8 @@ namespace CSharp_YoloOnnx
             int sampleStep,
             int minimumSamples,
             PointF referencePoint,
+            bool allowYellowOnly,
+            DateTime now,
             out PointF tip,
             out RectangleF bounds)
         {
@@ -286,6 +302,19 @@ namespace CSharp_YoloOnnx
                 if (count < minimumSamples)
                     continue;
 
+                float componentWidth =
+                    (maxX - minX + 1) * sampleStep;
+                float componentHeight =
+                    (maxY - minY + 1) * sampleStep;
+
+                // Large yellow/orange surfaces are background, not the
+                // compact tape marker fitted to the red tube.
+                if (componentWidth > MaximumYellowComponentSpan ||
+                    componentHeight > MaximumYellowComponentSpan)
+                {
+                    continue;
+                }
+
                 float centerX =
                     searchRegion.Left +
                     sumX / count *
@@ -294,6 +323,37 @@ namespace CSharp_YoloOnnx
                     searchRegion.Top +
                     sumY / count *
                     sampleStep;
+                RectangleF componentBounds =
+                    RectangleF.FromLTRB(
+                        searchRegion.Left +
+                        minX * sampleStep,
+                        searchRegion.Top +
+                        minY * sampleStep,
+                        Math.Min(
+                            frameSize.Width,
+                            searchRegion.Left +
+                            (maxX + 1) * sampleStep),
+                        Math.Min(
+                            frameSize.Height,
+                            searchRegion.Top +
+                            (maxY + 1) * sampleStep));
+                bool hasRedSupport =
+                    HasAdjacentRedTube(
+                        data,
+                        frameSize,
+                        bytesPerPixel,
+                        componentBounds,
+                        new PointF(centerX, centerY),
+                        sampleStep == RoiSampleStep
+                            ? MinimumRedRoiSamples
+                            : MinimumRedFullFrameSamples,
+                        sampleStep);
+
+                if (!hasRedSupport && !allowYellowOnly)
+                    continue;
+
+                if (hasRedSupport)
+                    lastRedYellowPairSeenAt = now;
                 float dx =
                     centerX - referencePoint.X;
                 float dy =
@@ -344,6 +404,77 @@ namespace CSharp_YoloOnnx
                     (bestMaxY + 1) *
                     sampleStep));
             return true;
+        }
+
+        private unsafe bool HasAdjacentRedTube(
+            BitmapData data,
+            Size frameSize,
+            int bytesPerPixel,
+            RectangleF yellowBounds,
+            PointF yellowCenter,
+            int minimumSamples,
+            int sampleStep)
+        {
+            Rectangle region = Rectangle.Intersect(
+                new Rectangle(0, 0, frameSize.Width, frameSize.Height),
+                Rectangle.FromLTRB(
+                    (int)Math.Floor(yellowBounds.Left - RedSearchRadius),
+                    (int)Math.Floor(yellowBounds.Top - RedSearchRadius),
+                    (int)Math.Ceiling(yellowBounds.Right + RedSearchRadius),
+                    (int)Math.Ceiling(yellowBounds.Bottom + RedSearchRadius)));
+
+            if (region.Width <= 0 || region.Height <= 0)
+                return false;
+
+            byte* scan0 = (byte*)data.Scan0.ToPointer();
+            int redSamples = 0;
+            float nearestSquared = float.MaxValue;
+            int redMinX = region.Right;
+            int redMinY = region.Bottom;
+            int redMaxX = region.Left;
+            int redMaxY = region.Top;
+
+            for (int y = region.Top; y < region.Bottom; y += sampleStep)
+            {
+                byte* row =
+                    data.Stride >= 0
+                        ? scan0 + y * data.Stride
+                        : scan0 +
+                          (frameSize.Height - 1 - y) *
+                          -data.Stride;
+
+                for (int x = region.Left; x < region.Right; x += sampleStep)
+                {
+                    byte* pixel = row + x * bytesPerPixel;
+
+                    if (!IsRedTube(pixel[2], pixel[1], pixel[0]))
+                        continue;
+
+                    redSamples++;
+                    redMinX = Math.Min(redMinX, x);
+                    redMinY = Math.Min(redMinY, y);
+                    redMaxX = Math.Max(redMaxX, x);
+                    redMaxY = Math.Max(redMaxY, y);
+                    float dx = x - yellowCenter.X;
+                    float dy = y - yellowCenter.Y;
+                    nearestSquared =
+                        Math.Min(nearestSquared, dx * dx + dy * dy);
+                }
+            }
+
+            if (redSamples < minimumSamples ||
+                nearestSquared >
+                RedContactDistance * RedContactDistance)
+            {
+                return false;
+            }
+
+            // A tube produces a visible red run. This rejects isolated red
+            // noise beside a yellow background object.
+            float redSpan = Math.Max(
+                redMaxX - redMinX,
+                redMaxY - redMinY);
+            return redSpan >= 12f;
         }
 
         private void UpdateMotion(
@@ -461,6 +592,44 @@ namespace CSharp_YoloOnnx
 
             mask[index] = false;
             queue[tail++] = index;
+        }
+
+        private static bool IsRedTube(
+            byte red,
+            byte green,
+            byte blue)
+        {
+            float r = red / 255f;
+            float g = green / 255f;
+            float b = blue / 255f;
+            float maximum = Math.Max(r, Math.Max(g, b));
+            float minimum = Math.Min(r, Math.Min(g, b));
+            float chroma = maximum - minimum;
+
+            if (maximum < 0.28f || chroma < 0.14f)
+                return false;
+
+            float saturation =
+                maximum <= 0f ? 0f : chroma / maximum;
+
+            if (saturation < 0.38f)
+                return false;
+
+            float hue;
+
+            if (maximum == r)
+                hue = 60f * (((g - b) / chroma) % 6f);
+            else if (maximum == g)
+                hue = 60f * (((b - r) / chroma) + 2f);
+            else
+                hue = 60f * (((r - g) / chroma) + 4f);
+
+            if (hue < 0f)
+                hue += 360f;
+
+            // Include the orange-red flexible tube seen under warm
+            // exhibition lighting, but exclude yellow hues.
+            return hue <= 28f || hue >= 345f;
         }
 
         private static bool IsYellow(
