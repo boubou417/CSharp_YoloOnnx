@@ -1,5 +1,16 @@
 # 版本紀錄
 
+## V1.5.6 Fast Motion Anti-Jump Test
+
+- Hold a suspicious large marker jump as provisional instead of adding it to the trajectory immediately.
+- Accept a provisional fast move on the next frame only when it remains near the candidate or continues in the same direction.
+- Reject one-frame jumps that return toward the previous real marker position, preventing long zigzag interpolation lines.
+- Scale jump, prediction-error, pending-match, and confirmed-step thresholds from the image diagonal for resolution-independent behavior.
+- Increase predicted-position weighting when choosing between multiple yellow candidates.
+- Prefer candidates with confirmed connected red-tube support over temporary yellow-only candidates.
+- Do not refresh red occlusion grace or run a same-frame full-image fallback when a provisional jump is rejected.
+- Preserve connected red-yellow validation, predictive full-resolution ROI tracking, CUDA/CPU fallback, scoring, and animation.
+
 ## V1.5.5 Connected Red-Yellow Pointer Test
 
 - Replace the loose count of all nearby red pixels with connected-component analysis for the red tube.
