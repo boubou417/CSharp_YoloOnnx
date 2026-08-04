@@ -1,5 +1,16 @@
 # 版本紀錄
 
+## V1.5.5 Connected Red-Yellow Pointer Test
+
+- Replace the loose count of all nearby red pixels with connected-component analysis for the red tube.
+- Reduce the red search radius from 110 to 60 pixels and require contact within 20 pixels of the yellow tip.
+- Require the red component to extend at least 24 pixels from the yellow marker.
+- Reject dense red/orange background patches using component fill ratio and principal-axis elongation checks.
+- Narrow the accepted red/orange-red hue and saturation range to reduce warm wall, cardboard, and wood false positives.
+- Refresh the temporary yellow-only allowance only when the final selected candidate actually has valid red-tube support.
+- Shorten red-tube occlusion grace from 150 ms to 80 ms.
+- Preserve predictive full-resolution ROI tracking, jitter tolerance, out-of-frame pause, CUDA/CPU fallback, scoring, and animation.
+
 ## V1.5.4 Red-Yellow Pointer Test
 
 - Require the compact yellow tip to have an adjacent saturated red or orange-red tube segment.
