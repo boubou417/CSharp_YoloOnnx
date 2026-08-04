@@ -12,22 +12,18 @@ namespace CSharp_YoloOnnx
     public sealed class YellowTipTracker
     {
         private const int SampleStep = 3;
-        private const int MinimumComponentSamples = 10;
-        private const float PreviousPositionWeight = 0.12f;
-        private const float MaximumLockedJump = 160f;
-        private const int PositionLockMs = 450;
+        private const int MinimumComponentSamples = 6;
+        private const float PreviousPositionWeight = 0.025f;
 
         private bool[] mask;
         private int[] queue;
         private int gridWidth;
         private int gridHeight;
         private PointF? previousPoint;
-        private DateTime previousPointSeenAt = DateTime.MinValue;
 
         public void Reset()
         {
             previousPoint = null;
-            previousPointSeenAt = DateTime.MinValue;
         }
 
         public unsafe bool TryDetect(
@@ -100,12 +96,6 @@ namespace CSharp_YoloOnnx
                 frame.UnlockBits(data);
             }
 
-            DateTime now = DateTime.UtcNow;
-            bool positionLocked =
-                previousPoint.HasValue &&
-                previousPointSeenAt != DateTime.MinValue &&
-                (now - previousPointSeenAt).TotalMilliseconds <=
-                    PositionLockMs;
             int bestCount = 0;
             float bestScore = float.MinValue;
             float bestSumX = 0f;
@@ -171,6 +161,30 @@ namespace CSharp_YoloOnnx
                         width,
                         height,
                         ref tail);
+                    EnqueueIfYellow(
+                        x - 1,
+                        y - 1,
+                        width,
+                        height,
+                        ref tail);
+                    EnqueueIfYellow(
+                        x + 1,
+                        y - 1,
+                        width,
+                        height,
+                        ref tail);
+                    EnqueueIfYellow(
+                        x - 1,
+                        y + 1,
+                        width,
+                        height,
+                        ref tail);
+                    EnqueueIfYellow(
+                        x + 1,
+                        y + 1,
+                        width,
+                        height,
+                        ref tail);
                 }
 
                 if (count < MinimumComponentSamples)
@@ -190,12 +204,6 @@ namespace CSharp_YoloOnnx
                         centerY - previousPoint.Value.Y;
                     float distance =
                         (float)Math.Sqrt(dx * dx + dy * dy);
-
-                    if (positionLocked &&
-                        distance > MaximumLockedJump)
-                    {
-                        continue;
-                    }
 
                     score -= distance *
                         PreviousPositionWeight;
@@ -230,7 +238,6 @@ namespace CSharp_YoloOnnx
                     frame.Height,
                     (bestMaxY + 1) * SampleStep));
             previousPoint = tip;
-            previousPointSeenAt = now;
             return true;
         }
 
