@@ -282,7 +282,7 @@ namespace CSharp_YoloOnnx
         {
             InitializeComponent();
 
-            Text = "CSharp YOLO ONNX V1.5.7 Resolution-Adaptive Overlay";
+            Text = "CSharp YOLO ONNX V1.5.8 Resolution-Adaptive Tracking";
             panelToolBar.Dock = DockStyle.Top;
             panelToolBar.Height = 40;
             panelStatusBar.Dock = DockStyle.Bottom;
@@ -313,7 +313,7 @@ namespace CSharp_YoloOnnx
             string modelPath = "yolov8n-pose.onnx";
             InitializeYoloSession(modelPath);
             Text =
-                "CSharp YOLO ONNX V1.5.7 Resolution-Adaptive Overlay | " +
+                "CSharp YOLO ONNX V1.5.8 Resolution-Adaptive Tracking | " +
                 yoloExecutionProvider;
         }
 
@@ -1356,6 +1356,8 @@ namespace CSharp_YoloOnnx
         private void UpdateYellowTipGame(Bitmap frame)
         {
             DateTime now = DateTime.Now;
+            float trackingScale =
+                GetResolutionScale(frame.Size);
 
             if (gameState == GameState.Finished)
             {
@@ -1393,6 +1395,7 @@ namespace CSharp_YoloOnnx
                 TryGetStableYellowTip(
                     frame,
                     now,
+                    trackingScale,
                     out tip,
                     out bounds,
                     out candidateVisible);
@@ -1436,7 +1439,10 @@ namespace CSharp_YoloOnnx
 
             if (gameState == GameState.Idle)
             {
-                UpdateYellowHold(tip, now);
+                UpdateYellowHold(
+                    tip,
+                    now,
+                    trackingScale);
 
                 int progress = GetProgressPercent(
                     yellowHoldStartedAt,
@@ -1463,14 +1469,20 @@ namespace CSharp_YoloOnnx
                 float dx = tip.X - origin.X;
                 float dy = tip.Y - origin.Y;
 
-                if (dx * dx + dy * dy >=
+                float startMoveDistance =
                     YellowStartMoveDistance *
-                    YellowStartMoveDistance)
+                    trackingScale;
+
+                if (dx * dx + dy * dy >=
+                    startMoveDistance *
+                    startMoveDistance)
                 {
                     yellowMovedAfterStart = true;
                     drawingStrokeStartPending = true;
                     ResetYellowHold();
-                    AddYellowDrawingPoint(tip);
+                    AddYellowDrawingPoint(
+                        tip,
+                        trackingScale);
                 }
                 else
                 {
@@ -1481,8 +1493,13 @@ namespace CSharp_YoloOnnx
                 return;
             }
 
-            AddYellowDrawingPoint(tip);
-            UpdateYellowHold(tip, now);
+            AddYellowDrawingPoint(
+                        tip,
+                        trackingScale);
+            UpdateYellowHold(
+                    tip,
+                    now,
+                    trackingScale);
             int finishProgress = GetProgressPercent(
                 yellowHoldStartedAt,
                 YellowFinishHoldMs,
@@ -1508,6 +1525,7 @@ namespace CSharp_YoloOnnx
         private bool TryGetStableYellowTip(
             Bitmap frame,
             DateTime now,
+            float trackingScale,
             out PointF tip,
             out RectangleF bounds,
             out bool candidateVisible)
@@ -1562,10 +1580,14 @@ namespace CSharp_YoloOnnx
                 float candidateDy =
                     rawTip.Y - yellowCandidateAnchor.Value.Y;
 
+                float reacquireRadius =
+                    YellowReacquireRadius *
+                    trackingScale;
+
                 if (candidateDx * candidateDx +
                     candidateDy * candidateDy >
-                    YellowReacquireRadius *
-                    YellowReacquireRadius)
+                    reacquireRadius *
+                    reacquireRadius)
                 {
                     yellowCandidateAnchor = rawTip;
                     yellowCandidateStartedAt = now;
@@ -1600,9 +1622,12 @@ namespace CSharp_YoloOnnx
                                 .TotalMilliseconds);
                 float maximumJump =
                     Math.Min(
-                        YellowMaximumAdaptiveJump,
-                        YellowBaseFrameJump +
+                        YellowMaximumAdaptiveJump *
+                        trackingScale,
+                        YellowBaseFrameJump *
+                        trackingScale +
                         YellowMaximumSpeedPixelsPerSecond *
+                        trackingScale *
                         (float)elapsedMilliseconds /
                         1000f);
 
@@ -1615,18 +1640,25 @@ namespace CSharp_YoloOnnx
                     return false;
                 }
 
-                if (distanceSquared <=
+                float jitterDeadZone =
                     YellowJitterDeadZone *
-                    YellowJitterDeadZone)
+                    trackingScale;
+
+                if (distanceSquared <=
+                    jitterDeadZone *
+                    jitterDeadZone)
                 {
                     rawTip = previous;
                 }
                 else
                 {
+                    float fastMotionDistance =
+                        YellowFastMotionDistance *
+                        trackingScale;
                     float smoothing =
                         distanceSquared >=
-                            YellowFastMotionDistance *
-                            YellowFastMotionDistance
+                            fastMotionDistance *
+                            fastMotionDistance
                             ? YellowFastPositionSmoothing
                             : YellowSlowPositionSmoothing;
                     rawTip = new PointF(
@@ -1648,7 +1680,9 @@ namespace CSharp_YoloOnnx
             return true;
         }
 
-        private void AddYellowDrawingPoint(PointF point)
+        private void AddYellowDrawingPoint(
+            PointF point,
+            float trackingScale)
         {
             if (drawingStrokeStartPending ||
                 drawingPoints.Count == 0)
@@ -1670,7 +1704,10 @@ namespace CSharp_YoloOnnx
                         1,
                         (int)Math.Ceiling(
                             distance /
-                            YellowInterpolationSpacing)));
+                            Math.Max(
+                                1f,
+                                YellowInterpolationSpacing *
+                                trackingScale))));
 
             for (int segment = 1;
                 segment <= segmentCount;
@@ -1701,7 +1738,8 @@ namespace CSharp_YoloOnnx
 
         private void UpdateYellowHold(
             PointF point,
-            DateTime now)
+            DateTime now,
+            float trackingScale)
         {
             if (!yellowHoldAnchor.HasValue)
             {
@@ -1715,8 +1753,12 @@ namespace CSharp_YoloOnnx
             float dy =
                 point.Y - yellowHoldAnchor.Value.Y;
 
+            float holdRadius =
+                YellowHoldRadius *
+                trackingScale;
+
             if (dx * dx + dy * dy >
-                YellowHoldRadius * YellowHoldRadius)
+                holdRadius * holdRadius)
             {
                 yellowHoldAnchor = point;
                 yellowHoldStartedAt = now;
@@ -2811,7 +2853,7 @@ namespace CSharp_YoloOnnx
             }
         }
 
-        private static float GetOverlayScale(
+        private static float GetResolutionScale(
             Size frameSize)
         {
             const double referencePixelCount = 1600000d;
@@ -2828,6 +2870,12 @@ namespace CSharp_YoloOnnx
             return Math.Max(
                 0.75f,
                 Math.Min(2.5f, scale));
+        }
+
+        private static float GetOverlayScale(
+            Size frameSize)
+        {
+            return GetResolutionScale(frameSize);
         }
 
         private void RenderDisplayImage(
