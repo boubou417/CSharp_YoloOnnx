@@ -25,7 +25,7 @@ namespace CSharp_YoloOnnx
         private const float PredictionErrorDiagonalRatio = 0.055f;
         private const float PendingMatchDiagonalRatio = 0.040f;
         private const float MaximumConfirmedStepDiagonalRatio = 0.20f;
-        private const int RedOcclusionGraceMs = 200;
+        private const int LockedYellowLossMs = 450;
         private const float RedSearchRadius = 60f;
         private const float RedContactDistance = 20f;
         private const int MinimumRedFullFrameSamples = 4;
@@ -45,14 +45,13 @@ namespace CSharp_YoloOnnx
         private DateTime lastRedYellowPairSeenAt = DateTime.MinValue;
         private PointF? pendingJumpPoint;
         private DateTime pendingJumpSeenAt = DateTime.MinValue;
+        private bool markerLocked;
+        private DateTime lockedYellowMissingSince =
+            DateTime.MinValue;
 
         public void Reset()
         {
-            previousPoint = null;
-            velocityPixelsPerMillisecond = PointF.Empty;
-            previousPointSeenAt = DateTime.MinValue;
-            lastRedYellowPairSeenAt = DateTime.MinValue;
-            ClearPendingJump();
+            ReleaseMarkerLock();
         }
 
         public unsafe bool TryDetect(
@@ -89,7 +88,6 @@ namespace CSharp_YoloOnnx
                 DateTime now = DateTime.UtcNow;
                 float resolutionScale =
                     GetResolutionScale(frame.Size);
-                PointF prediction = PointF.Empty;
                 bool hasPrediction =
                     previousPoint.HasValue &&
                     previousPointSeenAt != DateTime.MinValue &&
@@ -97,14 +95,14 @@ namespace CSharp_YoloOnnx
                         .TotalMilliseconds <=
                     PredictionMemoryMs;
 
-                if (hasPrediction)
+                if (markerLocked && hasPrediction)
                 {
                     double elapsedMilliseconds =
                         Math.Max(
                             1d,
                             (now - previousPointSeenAt)
                                 .TotalMilliseconds);
-                    prediction = new PointF(
+                    PointF prediction = new PointF(
                         previousPoint.Value.X +
                         velocityPixelsPerMillisecond.X *
                         (float)elapsedMilliseconds,
@@ -138,9 +136,6 @@ namespace CSharp_YoloOnnx
                             radius,
                             frame.Size);
 
-                    DateTime redPairBeforeSearch =
-                        lastRedYellowPairSeenAt;
-
                     if (TryFindYellowComponent(
                         data,
                         frame.Size,
@@ -150,39 +145,36 @@ namespace CSharp_YoloOnnx
                         MinimumRoiSamples,
                         prediction,
                         resolutionScale,
-                        lastRedYellowPairSeenAt != DateTime.MinValue &&
-                        (now - lastRedYellowPairSeenAt).TotalMilliseconds <=
-                        RedOcclusionGraceMs,
+                        true,
                         now,
                         out tip,
-                        out bounds))
-                    {
-                        if (AcceptMotionCandidate(
+                        out bounds) &&
+                        AcceptMotionCandidate(
                             tip,
                             now,
                             frame.Size))
-                        {
-                            UpdateMotion(tip, now);
-                            return true;
-                        }
-
-                        // A provisional jump must not refresh the red
-                        // occlusion grace or fall through to a different
-                        // full-frame object during the same frame.
-                        lastRedYellowPairSeenAt =
-                            redPairBeforeSearch;
-                        tip = PointF.Empty;
-                        bounds = RectangleF.Empty;
-                        return false;
+                    {
+                        ConfirmMarkerLock();
+                        UpdateMotion(tip, now);
+                        return true;
                     }
+
+                    tip = PointF.Empty;
+                    bounds = RectangleF.Empty;
+
+                    if (ShouldKeepMarkerLock(now))
+                        return false;
+
+                    ReleaseMarkerLock();
+                }
+                else if (markerLocked)
+                {
+                    ReleaseMarkerLock();
                 }
 
-                PointF reference =
-                    previousPoint ?? PointF.Empty;
-
-                DateTime redPairBeforeFullSearch =
-                    lastRedYellowPairSeenAt;
-
+                // Searching and true-loss reacquisition remain strict:
+                // a compact yellow marker must have connected red-tube
+                // support before it can establish a new lock.
                 if (TryFindYellowComponent(
                     data,
                     frame.Size,
@@ -190,34 +182,70 @@ namespace CSharp_YoloOnnx
                     frameBounds,
                     FullFrameSampleStep,
                     MinimumFullFrameSamples,
-                    reference,
+                    PointF.Empty,
                     resolutionScale,
                     false,
                     now,
                     out tip,
-                    out bounds))
-                {
-                    if (AcceptMotionCandidate(
+                    out bounds) &&
+                    AcceptMotionCandidate(
                         tip,
                         now,
                         frame.Size))
-                    {
-                        UpdateMotion(tip, now);
-                        return true;
-                    }
-
-                    lastRedYellowPairSeenAt =
-                        redPairBeforeFullSearch;
-                    tip = PointF.Empty;
-                    bounds = RectangleF.Empty;
+                {
+                    ConfirmMarkerLock();
+                    UpdateMotion(tip, now);
+                    return true;
                 }
 
+                tip = PointF.Empty;
+                bounds = RectangleF.Empty;
                 return false;
             }
             finally
             {
                 frame.UnlockBits(data);
             }
+        }
+
+        private void ConfirmMarkerLock()
+        {
+            markerLocked = true;
+            lockedYellowMissingSince =
+                DateTime.MinValue;
+        }
+
+        private bool ShouldKeepMarkerLock(
+            DateTime now)
+        {
+            if (!markerLocked)
+                return false;
+
+            if (lockedYellowMissingSince ==
+                DateTime.MinValue)
+            {
+                lockedYellowMissingSince = now;
+                return true;
+            }
+
+            return (now - lockedYellowMissingSince)
+                .TotalMilliseconds <
+                LockedYellowLossMs;
+        }
+
+        private void ReleaseMarkerLock()
+        {
+            markerLocked = false;
+            lockedYellowMissingSince =
+                DateTime.MinValue;
+            previousPoint = null;
+            velocityPixelsPerMillisecond =
+                PointF.Empty;
+            previousPointSeenAt =
+                DateTime.MinValue;
+            lastRedYellowPairSeenAt =
+                DateTime.MinValue;
+            ClearPendingJump();
         }
 
         private unsafe bool TryFindYellowComponent(
