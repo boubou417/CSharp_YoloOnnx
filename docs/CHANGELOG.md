@@ -1,5 +1,14 @@
 # 版本紀錄
 
+## Async Hand Landmark Performance Test
+
+- Move TensorFlow Lite hand-landmark invocation from the camera/display thread to a single background task.
+- Keep only one hand inference in flight and clone a new frame only when the worker is available.
+- Prioritize the active drawing hand; alternate left and right requests while idle.
+- Consume each completed hand result once, while permitting a confirmed result to remain visible for up to 400 ms.
+- Wait briefly for the hand worker during Stop and Form close before disposing the TFLite interpreter.
+- Keep stable landmark-only tracking thresholds and retain CAM/DISP/POSE/HAND diagnostics.
+
 ## Live Pipeline Diagnostics
 
 - Add a WinForms-only diagnostics panel at the bottom-right; nothing is drawn over the camera image.
