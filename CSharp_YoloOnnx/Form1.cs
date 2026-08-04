@@ -7,6 +7,7 @@ using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
@@ -108,6 +109,12 @@ namespace CSharp_YoloOnnx
         Thread poseInferenceThread;
         bool poseThreadComplete;
         int poseFrameSlotReserved;
+        int handInferenceBusy;
+        Task handInferenceTask;
+        volatile HandInferenceSnapshot latestHandSnapshot;
+        DateTime lastConsumedLeftHandAt = DateTime.MinValue;
+        DateTime lastConsumedRightHandAt = DateTime.MinValue;
+        DrawingHand nextIdleHandRequest = DrawingHand.Left;
         readonly Stopwatch cameraFpsStopwatch =
             Stopwatch.StartNew();
         readonly Stopwatch displayFpsStopwatch =
@@ -197,6 +204,35 @@ namespace CSharp_YoloOnnx
             }
         }
 
+        private sealed class HandInferenceSnapshot
+        {
+            public readonly DrawingHand Hand;
+            public readonly FingertipResult Result;
+            public readonly bool Detected;
+            public readonly DateTime CompletedAt;
+            public readonly PointF ForearmOffset;
+            public readonly double Milliseconds;
+            public readonly Exception Error;
+
+            public HandInferenceSnapshot(
+                DrawingHand hand,
+                FingertipResult result,
+                bool detected,
+                DateTime completedAt,
+                PointF forearmOffset,
+                double milliseconds,
+                Exception error)
+            {
+                Hand = hand;
+                Result = result;
+                Detected = detected;
+                CompletedAt = completedAt;
+                ForearmOffset = forearmOffset;
+                Milliseconds = milliseconds;
+                Error = error;
+            }
+        }
+
         private sealed class HandTrackingAnchor
         {
             public PointF Wrist;
@@ -215,7 +251,7 @@ namespace CSharp_YoloOnnx
         {
             InitializeComponent();
 
-            Text = "CSharp YOLO ONNX V1.3 Diagnostics";
+            Text = "CSharp YOLO ONNX V1.4 Async Hand Diagnostics";
             panelToolBar.Dock = DockStyle.Top;
             panelToolBar.Height = 40;
             panelStatusBar.Dock = DockStyle.Bottom;
@@ -245,7 +281,7 @@ namespace CSharp_YoloOnnx
             string modelPath = "yolov8n-pose.onnx";
             InitializeYoloSession(modelPath);
             Text =
-                "CSharp YOLO ONNX V1.3 Diagnostics | " +
+                "CSharp YOLO ONNX V1.4 Async Hand Diagnostics | " +
                 yoloExecutionProvider;
         }
 
@@ -355,6 +391,7 @@ namespace CSharp_YoloOnnx
             if (poseInferenceThread != null)
                 poseInferenceThread.Join(1500);
 
+            WaitForHandInference(1500);
             DisposePendingDisplayImage();
             DisposePendingPoseImage();
 
@@ -645,6 +682,13 @@ namespace CSharp_YoloOnnx
                 threadComplete = false;
                 poseThreadComplete = false;
                 latestPoseSnapshot = PoseSnapshot.Empty;
+                latestHandSnapshot = null;
+                lastConsumedLeftHandAt = DateTime.MinValue;
+                lastConsumedRightHandAt = DateTime.MinValue;
+                nextIdleHandRequest = DrawingHand.Left;
+                Interlocked.Exchange(
+                    ref handInferenceBusy,
+                    0);
                 DisposePendingPoseImage();
                 ResetPerformanceDiagnostics();
 
@@ -680,6 +724,7 @@ namespace CSharp_YoloOnnx
                     Thread.Sleep(10);
                 }
 
+                WaitForHandInference(1500);
                 cam.EndAcquisition();
                 DisposePendingPoseImage();
 
@@ -1577,9 +1622,11 @@ namespace CSharp_YoloOnnx
             Keypoint wristKeypoint =
                 person.Keypoints[wristIndex];
             bool elbowReliable =
-                elbowKeypoint.Score >= MinimumPoseHandKeypointScore;
+                elbowKeypoint.Score >=
+                    MinimumPoseHandKeypointScore;
             bool wristReliable =
-                wristKeypoint.Score >= MinimumPoseHandKeypointScore;
+                wristKeypoint.Score >=
+                    MinimumPoseHandKeypointScore;
             DateTime now = DateTime.Now;
             HandTrackingAnchor anchor =
                 GetHandTrackingAnchor(hand);
@@ -1592,15 +1639,23 @@ namespace CSharp_YoloOnnx
 
             if (elbowReliable && wristReliable)
             {
-                elbow = KeypointToImagePoint(elbowKeypoint);
-                wrist = KeypointToImagePoint(wristKeypoint);
+                elbow =
+                    KeypointToImagePoint(elbowKeypoint);
+                wrist =
+                    KeypointToImagePoint(wristKeypoint);
             }
-            else if (canUseTrackingFallback && wristReliable)
+            else if (canUseTrackingFallback &&
+                wristReliable)
             {
-                wrist = KeypointToImagePoint(wristKeypoint);
+                wrist =
+                    KeypointToImagePoint(wristKeypoint);
                 elbow = new PointF(
-                    wrist.X + anchor.Elbow.X - anchor.Wrist.X,
-                    wrist.Y + anchor.Elbow.Y - anchor.Wrist.Y);
+                    wrist.X +
+                    anchor.Elbow.X -
+                    anchor.Wrist.X,
+                    wrist.Y +
+                    anchor.Elbow.Y -
+                    anchor.Wrist.Y);
             }
             else if (canUseTrackingFallback)
             {
@@ -1613,62 +1668,229 @@ namespace CSharp_YoloOnnx
                 return false;
             }
 
-            try
+            PointF forearmOffset = new PointF(
+                elbow.X - wrist.X,
+                elbow.Y - wrist.Y);
+
+            bool consumed =
+                TryConsumeHandInference(
+                    hand,
+                    anchor,
+                    out result);
+
+            QueueHandInference(
+                frame,
+                hand,
+                wrist,
+                elbow,
+                forearmOffset);
+
+            return consumed;
+        }
+
+        private bool TryConsumeHandInference(
+            DrawingHand hand,
+            HandTrackingAnchor anchor,
+            out FingertipResult result)
+        {
+            result = null;
+            HandInferenceSnapshot snapshot =
+                latestHandSnapshot;
+
+            if (snapshot == null ||
+                snapshot.Hand != hand)
             {
-                float minimumHandPresence =
-                    gameState == GameState.Drawing &&
-                    hand == activeDrawingHand
-                        ? MinimumDrawingHandPresence
-                        : MinimumIdleHandPresence;
-                Stopwatch handStopwatch =
-                    Stopwatch.StartNew();
-                bool detected;
-
-                try
-                {
-                    detected = fingertipTracker.TryDetect(
-                        frame,
-                        wrist,
-                        elbow,
-                        minimumHandPresence,
-                        out result);
-                }
-                finally
-                {
-                    handStopwatch.Stop();
-                    latestHandInferenceMilliseconds =
-                        handStopwatch.Elapsed
-                            .TotalMilliseconds;
-                }
-
-                latestHandInferenceResult =
-                    detected
-                        ? "FOUND"
-                        : "LOST";
-
-                if (!detected)
-                    return false;
-
-                PointF forearmOffset = new PointF(
-                    elbow.X - wrist.X,
-                    elbow.Y - wrist.Y);
-                anchor.Wrist = result.Wrist;
-                anchor.Elbow = new PointF(
-                    result.Wrist.X + forearmOffset.X,
-                    result.Wrist.Y + forearmOffset.Y);
-                anchor.UpdatedAt = now;
-
-                return true;
+                return false;
             }
-            catch (Exception ex)
+
+            DateTime lastConsumed =
+                hand == DrawingHand.Left
+                    ? lastConsumedLeftHandAt
+                    : lastConsumedRightHandAt;
+
+            if (snapshot.CompletedAt <= lastConsumed)
+                return false;
+
+            if (hand == DrawingHand.Left)
+                lastConsumedLeftHandAt =
+                    snapshot.CompletedAt;
+            else
+                lastConsumedRightHandAt =
+                    snapshot.CompletedAt;
+
+            latestHandInferenceMilliseconds =
+                snapshot.Milliseconds;
+
+            if (snapshot.Error != null)
             {
                 latestHandInferenceResult = "ERROR";
                 Debug.WriteLine(
                     "Hand inference error (" +
                     GetHandDisplayName(hand) +
                     "): " +
-                    ex);
+                    snapshot.Error);
                 return false;
+            }
+
+            latestHandInferenceResult =
+                snapshot.Detected
+                    ? "FOUND"
+                    : "LOST";
+
+            if (!snapshot.Detected ||
+                snapshot.Result == null)
+            {
+                return false;
+            }
+
+            result = snapshot.Result;
+            anchor.Wrist = result.Wrist;
+            anchor.Elbow = new PointF(
+                result.Wrist.X +
+                snapshot.ForearmOffset.X,
+                result.Wrist.Y +
+                snapshot.ForearmOffset.Y);
+            anchor.UpdatedAt =
+                snapshot.CompletedAt;
+            return true;
+        }
+
+        private void QueueHandInference(
+            Bitmap frame,
+            DrawingHand hand,
+            PointF wrist,
+            PointF elbow,
+            PointF forearmOffset)
+        {
+            if (!grabImage ||
+                fingertipTracker == null ||
+                !ShouldScheduleHand(hand) ||
+                Interlocked.CompareExchange(
+                    ref handInferenceBusy,
+                    1,
+                    0) != 0)
+            {
+                return;
+            }
+
+            Bitmap inferenceFrame = null;
+
+            try
+            {
+                inferenceFrame = frame.Clone(
+                    new Rectangle(
+                        0,
+                        0,
+                        frame.Width,
+                        frame.Height),
+                    PixelFormat.Format24bppRgb);
+                float minimumPresence =
+                    gameState == GameState.Drawing &&
+                    hand == activeDrawingHand
+                        ? MinimumDrawingHandPresence
+                        : MinimumIdleHandPresence;
+
+                if (gameState == GameState.Idle)
+                {
+                    nextIdleHandRequest =
+                        hand == DrawingHand.Left
+                            ? DrawingHand.Right
+                            : DrawingHand.Left;
+                }
+
+                Bitmap ownedFrame = inferenceFrame;
+                inferenceFrame = null;
+                handInferenceTask = Task.Run(() =>
+                {
+                    Stopwatch stopwatch =
+                        Stopwatch.StartNew();
+                    FingertipResult detectedResult = null;
+                    bool detected = false;
+                    Exception error = null;
+
+                    try
+                    {
+                        detected =
+                            fingertipTracker.TryDetect(
+                                ownedFrame,
+                                wrist,
+                                elbow,
+                                minimumPresence,
+                                out detectedResult);
+                    }
+                    catch (Exception ex)
+                    {
+                        error = ex;
+                    }
+                    finally
+                    {
+                        stopwatch.Stop();
+                        ownedFrame.Dispose();
+                    }
+
+                    latestHandSnapshot =
+                        new HandInferenceSnapshot(
+                            hand,
+                            detectedResult,
+                            detected,
+                            DateTime.Now,
+                            forearmOffset,
+                            stopwatch.Elapsed
+                                .TotalMilliseconds,
+                            error);
+                    latestHandInferenceMilliseconds =
+                        stopwatch.Elapsed
+                            .TotalMilliseconds;
+                    latestHandInferenceResult =
+                        error != null
+                            ? "ERROR"
+                            : detected
+                                ? "FOUND"
+                                : "LOST";
+                    Interlocked.Exchange(
+                        ref handInferenceBusy,
+                        0);
+                });
+            }
+            catch
+            {
+                inferenceFrame?.Dispose();
+                Interlocked.Exchange(
+                    ref handInferenceBusy,
+                    0);
+                throw;
+            }
+        }
+
+        private bool ShouldScheduleHand(
+            DrawingHand hand)
+        {
+            if (gameState == GameState.Drawing)
+                return hand == activeDrawingHand;
+
+            if (gameState == GameState.Idle)
+                return hand == nextIdleHandRequest;
+
+            return false;
+        }
+
+        private void WaitForHandInference(
+            int timeoutMilliseconds)
+        {
+            Task task = handInferenceTask;
+
+            if (task == null)
+                return;
+
+            try
+            {
+                task.Wait(timeoutMilliseconds);
+            }
+            catch (AggregateException ex)
+            {
+                Debug.WriteLine(
+                    "Hand worker shutdown error: " +
+                    ex.Flatten());
             }
         }
 
