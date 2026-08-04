@@ -282,7 +282,7 @@ namespace CSharp_YoloOnnx
         {
             InitializeComponent();
 
-            Text = "CSharp YOLO ONNX V1.5.6 Fast Motion Anti-Jump";
+            Text = "CSharp YOLO ONNX V1.5.7 Resolution-Adaptive Overlay";
             panelToolBar.Dock = DockStyle.Top;
             panelToolBar.Height = 40;
             panelStatusBar.Dock = DockStyle.Bottom;
@@ -313,7 +313,7 @@ namespace CSharp_YoloOnnx
             string modelPath = "yolov8n-pose.onnx";
             InitializeYoloSession(modelPath);
             Text =
-                "CSharp YOLO ONNX V1.5.6 Fast Motion Anti-Jump | " +
+                "CSharp YOLO ONNX V1.5.7 Resolution-Adaptive Overlay | " +
                 yoloExecutionProvider;
         }
 
@@ -2811,6 +2811,25 @@ namespace CSharp_YoloOnnx
             }
         }
 
+        private static float GetOverlayScale(
+            Size frameSize)
+        {
+            const double referencePixelCount = 1600000d;
+            double pixelCount =
+                Math.Max(
+                    1d,
+                    (double)frameSize.Width *
+                    frameSize.Height);
+            float scale =
+                (float)Math.Sqrt(
+                    pixelCount /
+                    referencePixelCount);
+
+            return Math.Max(
+                0.75f,
+                Math.Min(2.5f, scale));
+        }
+
         private void RenderDisplayImage(
             Bitmap copy,
             List<Detection> boxes,
@@ -2818,14 +2837,22 @@ namespace CSharp_YoloOnnx
             double poseInferenceMilliseconds)
         {
             UpdateGame(main, copy);
+            float overlayScale =
+                GetOverlayScale(copy.Size);
 
             using (Graphics g = Graphics.FromImage(copy))
-            using (Pen mainPen = new Pen(Color.Lime, 3))
+            using (Pen mainPen = new Pen(
+                Color.Lime,
+                3f * overlayScale))
             using (Pen otherPen = new Pen(
                 Color.FromArgb(120, 200, 200, 200),
-                1))
-            using (Pen boxPen = new Pen(Color.Red, 2))
-            using (Pen eyePen = new Pen(Color.Magenta, 3))
+                1f * overlayScale))
+            using (Pen boxPen = new Pen(
+                Color.Red,
+                2f * overlayScale))
+            using (Pen eyePen = new Pen(
+                Color.Magenta,
+                3f * overlayScale))
             {
                 g.SmoothingMode = SmoothingMode.AntiAlias;
                 g.CompositingQuality = CompositingQuality.HighSpeed;
@@ -2853,7 +2880,7 @@ namespace CSharp_YoloOnnx
                 };
 
                 // 軌跡（畫在最上層前）
-                DrawHandTrail(g);
+                DrawHandTrail(g, overlayScale);
 
                 foreach (var b in boxes)
                 {
@@ -2896,14 +2923,20 @@ namespace CSharp_YoloOnnx
 
                             var baseColor = isMain ? jointColors[skeleton[i, 1]] : Color.Gray;
 
-                            using (Pen glow = new Pen(Color.FromArgb(120, baseColor), isMain ? 10 : 4))
+                            using (Pen glow = new Pen(
+                                Color.FromArgb(120, baseColor),
+                                (isMain ? 10f : 4f) *
+                                overlayScale))
                             {
                                 glow.StartCap = LineCap.Round;
                                 glow.EndCap = LineCap.Round;
                                 g.DrawLine(glow, x1, y1, x2, y2);
                             }
 
-                            using (Pen core = new Pen(baseColor, isMain ? 3 : 1))
+                            using (Pen core = new Pen(
+                                baseColor,
+                                (isMain ? 3f : 1f) *
+                                overlayScale))
                             {
                                 core.StartCap = LineCap.Round;
                                 core.EndCap = LineCap.Round;
@@ -2919,7 +2952,9 @@ namespace CSharp_YoloOnnx
                             float px = (kp.X - _padX) / _ratio;
                             float py = (kp.Y - _padY) / _ratio;
 
-                            int size = isMain ? 6 : 3;
+                            float size =
+                                (isMain ? 6f : 3f) *
+                                overlayScale;
 
                             using (Brush glow = new SolidBrush(Color.FromArgb(120, 255, 255, 255)))
                             {
@@ -2968,7 +3003,8 @@ namespace CSharp_YoloOnnx
 
                         using (Pen torsoPen = new Pen(
                             Color.Cyan,
-                            isMain ? 3 : 1))
+                            (isMain ? 3f : 1f) *
+                            overlayScale))
                         {
                             g.DrawLine(
                                 torsoPen,
@@ -2987,24 +3023,28 @@ namespace CSharp_YoloOnnx
                         new SolidBrush(Color.FromArgb(120, 0, 0, 0)))
                     using (Font helloFont = new Font(
                         "Arial",
-                        32,
+                        32f * overlayScale,
                         FontStyle.Bold))
                     {
                         g.FillRectangle(
                             helloBackground,
-                            5,
-                            5,
-                            260,
-                            60);
+                            5f * overlayScale,
+                            5f * overlayScale,
+                            260f * overlayScale,
+                            60f * overlayScale);
                         g.DrawString(
                             " HELLO!",
                             helloFont,
                             Brushes.Yellow,
-                            new PointF(10, 100));
+                            new PointF(
+                                10f * overlayScale,
+                                100f * overlayScale));
                     }
                 }
 
-                DrawFingertipMarker(g);
+                DrawFingertipMarker(
+                    g,
+                    overlayScale);
                 DrawMagicAnimation(g, copy.Width, copy.Height);
             }
         }
@@ -3079,12 +3119,18 @@ namespace CSharp_YoloOnnx
             }
         }
 
-        private void DrawHandTrail(Graphics graphics)
+        private void DrawHandTrail(
+            Graphics graphics,
+            float overlayScale)
         {
             if (handTrail.Count == 0)
                 return;
 
-            using (Pen trailPen = new Pen(Color.Yellow, 4f))
+            float trailWidth = 4f * overlayScale;
+
+            using (Pen trailPen = new Pen(
+                Color.Yellow,
+                trailWidth))
             using (Brush pointBrush = new SolidBrush(Color.Yellow))
             {
                 trailPen.StartCap = LineCap.Round;
@@ -3115,10 +3161,10 @@ namespace CSharp_YoloOnnx
                         PointF point = handTrail[start];
                         graphics.FillEllipse(
                             pointBrush,
-                            point.X - 2f,
-                            point.Y - 2f,
-                            4f,
-                            4f);
+                            point.X - trailWidth * 0.5f,
+                            point.Y - trailWidth * 0.5f,
+                            trailWidth,
+                            trailWidth);
                     }
                     else
                     {
@@ -3130,7 +3176,9 @@ namespace CSharp_YoloOnnx
             }
         }
 
-        private void DrawFingertipMarker(Graphics graphics)
+        private void DrawFingertipMarker(
+            Graphics graphics,
+            float overlayScale)
         {
             if ((gameState != GameState.Idle &&
                  gameState != GameState.Drawing) ||
@@ -3143,15 +3191,17 @@ namespace CSharp_YoloOnnx
 
             if (yellowTipMode)
             {
-                using (Pen markerPen = new Pen(Color.Gold, 4f))
+                using (Pen markerPen = new Pen(
+                    Color.Gold,
+                    4f * overlayScale))
                 using (Pen boundsPen = new Pen(
                     Color.FromArgb(180, 255, 215, 0),
-                    2f))
+                    2f * overlayScale))
                 using (Brush centerBrush =
                     new SolidBrush(Color.White))
                 using (Font markerFont = new Font(
                     "Microsoft JhengHei UI",
-                    11f,
+                    11f * overlayScale,
                     FontStyle.Bold))
                 {
                     graphics.DrawRectangle(
@@ -3162,22 +3212,22 @@ namespace CSharp_YoloOnnx
                         displayedYellowTipBounds.Height);
                     graphics.DrawEllipse(
                         markerPen,
-                        point.X - 12f,
-                        point.Y - 12f,
-                        24f,
-                        24f);
+                        point.X - 12f * overlayScale,
+                        point.Y - 12f * overlayScale,
+                        24f * overlayScale,
+                        24f * overlayScale);
                     graphics.FillEllipse(
                         centerBrush,
-                        point.X - 3f,
-                        point.Y - 3f,
-                        6f,
-                        6f);
+                        point.X - 3f * overlayScale,
+                        point.Y - 3f * overlayScale,
+                        6f * overlayScale,
+                        6f * overlayScale);
                     graphics.DrawString(
                         "黃色筆尖",
                         markerFont,
                         Brushes.Gold,
-                        point.X + 15f,
-                        point.Y - 14f);
+                        point.X + 15f * overlayScale,
+                        point.Y - 14f * overlayScale);
 
                     int delay =
                         gameState == GameState.Idle
@@ -3191,14 +3241,16 @@ namespace CSharp_YoloOnnx
                     if (progress > 0)
                     {
                         using (Pen progressPen =
-                            new Pen(Color.Lime, 4f))
+                            new Pen(
+                                Color.Lime,
+                                4f * overlayScale))
                         {
                             graphics.DrawArc(
                                 progressPen,
-                                point.X - 17f,
-                                point.Y - 17f,
-                                34f,
-                                34f,
+                                point.X - 17f * overlayScale,
+                                point.Y - 17f * overlayScale,
+                                34f * overlayScale,
+                                34f * overlayScale,
                                 -90f,
                                 360f * progress / 100f);
                         }
@@ -3215,24 +3267,30 @@ namespace CSharp_YoloOnnx
                     out gestureProgress,
                     out pinchGesture);
 
-            using (Pen outline = new Pen(Color.Cyan, 3f))
-            using (Pen thumbOutline = new Pen(Color.Magenta, 3f))
-            using (Pen pinchLine = new Pen(Color.Orange, 2f))
+            using (Pen outline = new Pen(
+                Color.Cyan,
+                3f * overlayScale))
+            using (Pen thumbOutline = new Pen(
+                Color.Magenta,
+                3f * overlayScale))
+            using (Pen pinchLine = new Pen(
+                Color.Orange,
+                2f * overlayScale))
             using (Pen progressPen = new Pen(
                 pinchGesture ? Color.Orange : Color.Lime,
-                4f))
+                4f * overlayScale))
             using (Brush center = new SolidBrush(Color.White))
             using (Font font = new Font(
                 "Microsoft JhengHei UI",
-                10f,
+                10f * overlayScale,
                 FontStyle.Bold))
             {
                 graphics.DrawEllipse(
                     outline,
-                    point.X - 9f,
-                    point.Y - 9f,
-                    18f,
-                    18f);
+                    point.X - 9f * overlayScale,
+                    point.Y - 9f * overlayScale,
+                    18f * overlayScale,
+                    18f * overlayScale);
                 graphics.FillEllipse(
                     center,
                     point.X - 3f,
@@ -3246,8 +3304,8 @@ namespace CSharp_YoloOnnx
                     "%",
                     font,
                     Brushes.Cyan,
-                    point.X + 12f,
-                    point.Y - 12f);
+                    point.X + 12f * overlayScale,
+                    point.Y - 12f * overlayScale);
 
                 if (displayedThumbPoint.HasValue)
                 {
@@ -3255,10 +3313,10 @@ namespace CSharp_YoloOnnx
 
                     graphics.DrawEllipse(
                         thumbOutline,
-                        thumb.X - 7f,
-                        thumb.Y - 7f,
-                        14f,
-                        14f);
+                        thumb.X - 7f * overlayScale,
+                        thumb.Y - 7f * overlayScale,
+                        14f * overlayScale,
+                        14f * overlayScale);
 
                     if (showGestureProgress && pinchGesture)
                     {
@@ -3273,10 +3331,10 @@ namespace CSharp_YoloOnnx
                 {
                     graphics.DrawArc(
                         progressPen,
-                        point.X - 14f,
-                        point.Y - 14f,
-                        28f,
-                        28f,
+                        point.X - 14f * overlayScale,
+                        point.Y - 14f * overlayScale,
+                        28f * overlayScale,
+                        28f * overlayScale,
                         -90f,
                         360f * gestureProgress);
                 }
@@ -3290,8 +3348,8 @@ namespace CSharp_YoloOnnx
                         showGestureProgress && pinchGesture
                             ? Brushes.Orange
                             : Brushes.Magenta,
-                        point.X + 12f,
-                        point.Y + 6f);
+                        point.X + 12f * overlayScale,
+                        point.Y + 6f * overlayScale);
                 }
             }
         }
