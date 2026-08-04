@@ -1494,12 +1494,12 @@ namespace CSharp_YoloOnnx
             }
 
             AddYellowDrawingPoint(
-                        tip,
-                        trackingScale);
+                tip,
+                trackingScale);
             UpdateYellowHold(
-                    tip,
-                    now,
-                    trackingScale);
+                tip,
+                now,
+                trackingScale);
             int finishProgress = GetProgressPercent(
                 yellowHoldStartedAt,
                 YellowFinishHoldMs,
