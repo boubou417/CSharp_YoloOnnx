@@ -1,5 +1,15 @@
 # 版本紀錄
 
+## V1.5.2 Fast Yellow Tip Test
+
+- Replace the fixed 160-pixel jump rejection with an elapsed-time adaptive motion allowance.
+- Permit approximately 310 pixels per frame at 30 FPS and grow the allowance after a short missed frame, capped at 480 pixels.
+- Preserve tracking through brief losses under 120 ms without requiring the marker to stop for reacquisition.
+- Use stronger position response during fast motion and retain the 4-pixel jitter dead zone for stationary holds.
+- Connect yellow components in eight directions and accept smaller motion-blurred components.
+- Insert bounded intermediate trajectory points across sparse valid samples, with at most 16 inserted segments.
+- Preserve HSV skin-tone rejection, out-of-frame pause behavior, and 30-pixel hold tolerance.
+
 ## V1.5.1 Stable Yellow Tip Test
 
 - Replace broad RGB yellow detection with HSV hue and saturation filtering to reject skin tones.
