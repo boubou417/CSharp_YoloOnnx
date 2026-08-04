@@ -1,5 +1,15 @@
 # 版本紀錄
 
+## V1.5.1 Stable Yellow Tip Test
+
+- Replace broad RGB yellow detection with HSV hue and saturation filtering to reject skin tones.
+- Lock a recently tracked marker and reject single-frame jumps larger than 160 pixels.
+- Pause trajectory recording when the yellow marker leaves the image instead of switching to another yellow candidate.
+- Require a returning marker to remain stable for 200 ms before tracking resumes.
+- Increase start and finish hold tolerance from 14 to 30 pixels for a flexible, slightly shaking pointer.
+- Add a 4-pixel dead zone and exponential position smoothing to reduce visible jitter.
+- Start a new trajectory segment after a genuine marker loss so missing frames are never bridged by a long line.
+
 ## V1.5 Yellow Tip Tracking Test
 
 - Replace fingertip landmark drawing with direct yellow marker tracking.
