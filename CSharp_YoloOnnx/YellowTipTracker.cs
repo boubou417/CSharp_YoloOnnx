@@ -25,7 +25,7 @@ namespace CSharp_YoloOnnx
         private const float PredictionErrorDiagonalRatio = 0.055f;
         private const float PendingMatchDiagonalRatio = 0.040f;
         private const float MaximumConfirmedStepDiagonalRatio = 0.20f;
-        private const int RedOcclusionGraceMs = 80;
+        private const int RedOcclusionGraceMs = 200;
         private const float RedSearchRadius = 60f;
         private const float RedContactDistance = 20f;
         private const int MinimumRedFullFrameSamples = 4;
@@ -956,15 +956,12 @@ namespace CSharp_YoloOnnx
             int baseCount,
             float resolutionScale)
         {
-            float areaScale =
-                resolutionScale *
-                resolutionScale;
-
-            return Math.Max(
-                3,
-                (int)Math.Round(
-                    baseCount *
-                    areaScale));
+            // Saturated marker pixels do not reliably grow with total
+            // camera megapixels because lens, field of view, exposure,
+            // motion blur, and binning all change the visible component.
+            // Keep the proven 1.6 MP sample counts while scaling only
+            // geometric distances and search regions.
+            return Math.Max(3, baseCount);
         }
 
         private static Rectangle IntersectWithFrame(
