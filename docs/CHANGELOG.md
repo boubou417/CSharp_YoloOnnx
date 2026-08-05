@@ -1,5 +1,14 @@
 # 版本紀錄
 
+## V1.5.13 Live GPU Diagnostics Test
+
+- Restore the independent WinForms diagnostics label at the bottom-right of the window.
+- Show the active YOLO execution provider (`CUDA GPU` or `CPU fallback`).
+- Show camera acquisition FPS, displayed-frame FPS, YOLO pose inference milliseconds/equivalent FPS, and hand inference milliseconds/result.
+- Refresh diagnostics at most four times per second so text formatting does not meaningfully affect the benchmark.
+- Keep all diagnostic text outside the camera bitmap.
+- Preserve V1.5.12 calibrated generic scoring, locked yellow tracking, drawing storage, and animation behavior.
+
 ## V1.5.12 Calibrated Shape Scoring Test
 
 - Keep the V1.5.11 centerline distance, two-way coverage, outlier, and path-length comparison unchanged.

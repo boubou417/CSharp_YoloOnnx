@@ -98,6 +98,7 @@ namespace CSharp_YoloOnnx
         Button btnSelectTemplate;
         Label lblSimilarityScore;
         Label lblAirDrawStatus;
+        Label lblPerformanceDiagnostics;
         FingertipTracker fingertipTracker;
         readonly YellowTipTracker yellowTipTracker =
             new YellowTipTracker();
@@ -157,6 +158,8 @@ namespace CSharp_YoloOnnx
         double poseFramesPerSecond;
         double latestHandInferenceMilliseconds;
         string latestHandInferenceResult = "WAIT";
+        DateTime lastPerformanceDiagnosticsUpdateAt =
+            DateTime.MinValue;
         Image magicAnimationImage;
         MemoryStream magicAnimationStream;
         DateTime magicAnimationStartedAt = DateTime.MinValue;
@@ -282,7 +285,7 @@ namespace CSharp_YoloOnnx
         {
             InitializeComponent();
 
-            Text = "CSharp YOLO ONNX V1.5.12 Calibrated Shape Scoring";
+            Text = "CSharp YOLO ONNX V1.5.13 Live GPU Diagnostics";
             panelToolBar.Dock = DockStyle.Top;
             panelToolBar.Height = 40;
             panelStatusBar.Dock = DockStyle.Bottom;
@@ -313,7 +316,7 @@ namespace CSharp_YoloOnnx
             string modelPath = "yolov8n-pose.onnx";
             InitializeYoloSession(modelPath);
             Text =
-                "CSharp YOLO ONNX V1.5.12 Calibrated Shape Scoring | " +
+                "CSharp YOLO ONNX V1.5.13 Live GPU Diagnostics | " +
                 yoloExecutionProvider;
         }
 
@@ -601,9 +604,31 @@ namespace CSharp_YoloOnnx
                 Text = drawingStatusText
             };
 
+            lblPerformanceDiagnostics = new Label
+            {
+                Dock = DockStyle.Right,
+                Width = 650,
+                AutoEllipsis = true,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Padding = new Padding(8, 0, 8, 0),
+                BorderStyle = BorderStyle.FixedSingle,
+                Font = new Font(
+                    "Consolas",
+                    9f,
+                    FontStyle.Regular),
+                ForeColor = Color.Navy,
+                BackColor = Color.WhiteSmoke,
+                Text =
+                    "YOLO -- | CAM -- | DISP -- | " +
+                    "POSE -- | HAND -- | WAIT"
+            };
+
             panelStatusBar.Controls.Add(lblAirDrawStatus);
+            panelStatusBar.Controls.Add(
+                lblPerformanceDiagnostics);
             panelStatusBar.Controls.Add(lblSimilarityScore);
             lblSimilarityScore.BringToFront();
+            lblPerformanceDiagnostics.BringToFront();
         }
 
         private void TryLoadDefaultTemplate()
@@ -3458,6 +3483,8 @@ namespace CSharp_YoloOnnx
             poseFramesPerSecond = 0d;
             latestHandInferenceMilliseconds = 0d;
             latestHandInferenceResult = "WAIT";
+            lastPerformanceDiagnosticsUpdateAt =
+                DateTime.MinValue;
             cameraFpsStopwatch.Restart();
             displayFpsStopwatch.Restart();
         }
@@ -3504,6 +3531,46 @@ namespace CSharp_YoloOnnx
             displayFpsStopwatch.Restart();
         }
 
+        private void UpdatePerformanceDiagnostics()
+        {
+            if (lblPerformanceDiagnostics == null ||
+                lblPerformanceDiagnostics.IsDisposed)
+            {
+                return;
+            }
+
+            DateTime now = DateTime.Now;
+
+            if (lastPerformanceDiagnosticsUpdateAt !=
+                    DateTime.MinValue &&
+                (now - lastPerformanceDiagnosticsUpdateAt)
+                    .TotalMilliseconds < 250d)
+            {
+                return;
+            }
+
+            lastPerformanceDiagnosticsUpdateAt = now;
+            PoseSnapshot pose =
+                latestPoseSnapshot ??
+                PoseSnapshot.Empty;
+            lblPerformanceDiagnostics.Text =
+                "YOLO " +
+                yoloExecutionProvider +
+                " | CAM " +
+                cameraFramesPerSecond.ToString("0.0") +
+                " FPS | DISP " +
+                displayFramesPerSecond.ToString("0.0") +
+                " FPS | POSE " +
+                pose.InferenceMilliseconds.ToString("0") +
+                " ms/" +
+                poseFramesPerSecond.ToString("0.0") +
+                " FPS | HAND " +
+                latestHandInferenceMilliseconds
+                    .ToString("0") +
+                " ms | " +
+                latestHandInferenceResult;
+        }
+
         private void UpdateAirDrawStatusBar()
         {
             if (lblAirDrawStatus == null ||
@@ -3537,6 +3604,8 @@ namespace CSharp_YoloOnnx
                 stateText +
                 "｜" +
                 drawingStatusText;
+
+            UpdatePerformanceDiagnostics();
 
             if (lblSimilarityScore == null ||
                 lblSimilarityScore.IsDisposed)
