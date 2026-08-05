@@ -5,9 +5,10 @@ using System.Drawing.Imaging;
 namespace CSharp_YoloOnnx
 {
     /// <summary>
-    /// Finds a thin red tube associated with either pose wrist and returns
-    /// the free tube endpoint farthest from that wrist. The wrist is used
-    /// only to identify the held tube; it is never used as the drawing end.
+    /// Locks a thin red tube to one pose wrist, follows the connected red
+    /// path around bends, and returns the path endpoint opposite the grip.
+    /// The lock and jump gate prevent background candidates or wrist swaps
+    /// from becoming drawing points during a stroke.
     /// </summary>
     public sealed class RedTubeTracker
     {
@@ -15,35 +16,49 @@ namespace CSharp_YoloOnnx
         private const double HighResolutionPixelCount = 1000000d;
         private const double VeryHighResolutionPixelCount = 4200000d;
         private const float SearchRadius = 650f;
-        private const float MaximumWristDistance = 360f;
+        private const float MaximumWristDistance = 220f;
         private const int MinimumFullResolutionSamples = 32;
         private const int MinimumSampledSamples = 10;
-        private const float MinimumTubeSpan = 75f;
-        private const float MinimumTubeExtension = 150f;
-        private const float MinimumTipWristDistance = 220f;
-        private const float MaximumTubeFillRatio = 0.50f;
-        private const float MinimumTubeElongation = 3.00f;
+        private const float MinimumTubeSpan = 55f;
+        private const float MinimumTubePathLength = 110f;
+        private const float MaximumTubeFillRatio = 0.58f;
         private const float MaximumTubeThickness = 40f;
-        private const float EndpointBand = 14f;
-        private const int PreviousPointMemoryMs = 450;
-        private const float PreviousPointWeight = 0.22f;
+        private const float MinimumStrongRedFraction = 0.05f;
+        private const int MinimumStrongRedSamples = 4;
+        private const float EndpointBand = 16f;
+        private const int PreviousPointMemoryMs = 550;
+        private const int ActiveWristLockMs = 1000;
+        private const float PreviousPointWeight = 0.70f;
+        private const float TrackedBaseJump = 70f;
+        private const float TrackedMaximumSpeed = 4200f;
+        private const float TrackedMaximumJump = 280f;
 
         private bool[] mask;
+        private bool[] strongMask;
         private int[] queue;
+        private int[] pathQueue;
+        private int[] pathDistance;
+        private int[] componentMarks;
+        private int componentGeneration;
         private PointF? previousPoint;
         private DateTime previousPointSeenAt = DateTime.MinValue;
+        private int activeWristIndex = -1;
+        private DateTime activeWristSeenAt = DateTime.MinValue;
 
         private sealed class Candidate
         {
             public PointF Point;
             public RectangleF Bounds;
             public float Score = float.MaxValue;
+            public int WristIndex = -1;
         }
 
         public void Reset()
         {
             previousPoint = null;
             previousPointSeenAt = DateTime.MinValue;
+            activeWristIndex = -1;
+            activeWristSeenAt = DateTime.MinValue;
         }
 
         public unsafe bool TryDetect(
@@ -114,39 +129,89 @@ namespace CSharp_YoloOnnx
                         MinimumFullResolutionSamples /
                         (sampleStep * sampleStep));
                 Candidate best = new Candidate();
-
-                if (leftWrist.HasValue &&
+                ResetExpiredPoint(now);
+                bool leftWristValid =
+                    leftWrist.HasValue &&
                     IsInsideFrame(
                         leftWrist.Value,
-                        frame.Size))
+                        frame.Size);
+                bool rightWristValid =
+                    rightWrist.HasValue &&
+                    IsInsideFrame(
+                        rightWrist.Value,
+                        frame.Size);
+                bool wristLockActive =
+                    activeWristIndex >= 0 &&
+                    activeWristSeenAt !=
+                        DateTime.MinValue &&
+                    (now - activeWristSeenAt)
+                        .TotalMilliseconds <=
+                    ActiveWristLockMs;
+
+                if (wristLockActive)
                 {
-                    FindBestNearWrist(
-                        data,
-                        frame.Size,
-                        bytesPerPixel,
-                        leftWrist.Value,
-                        sampleStep,
-                        minimumSamples,
-                        resolutionScale,
-                        now,
-                        best);
+                    if (activeWristIndex == 0 &&
+                        leftWristValid)
+                    {
+                        FindBestNearWrist(
+                            data,
+                            frame.Size,
+                            bytesPerPixel,
+                            leftWrist.Value,
+                            0,
+                            sampleStep,
+                            minimumSamples,
+                            resolutionScale,
+                            now,
+                            best);
+                    }
+                    else if (activeWristIndex == 1 &&
+                        rightWristValid)
+                    {
+                        FindBestNearWrist(
+                            data,
+                            frame.Size,
+                            bytesPerPixel,
+                            rightWrist.Value,
+                            1,
+                            sampleStep,
+                            minimumSamples,
+                            resolutionScale,
+                            now,
+                            best);
+                    }
                 }
-
-                if (rightWrist.HasValue &&
-                    IsInsideFrame(
-                        rightWrist.Value,
-                        frame.Size))
+                else
                 {
-                    FindBestNearWrist(
-                        data,
-                        frame.Size,
-                        bytesPerPixel,
-                        rightWrist.Value,
-                        sampleStep,
-                        minimumSamples,
-                        resolutionScale,
-                        now,
-                        best);
+                    if (leftWristValid)
+                    {
+                        FindBestNearWrist(
+                            data,
+                            frame.Size,
+                            bytesPerPixel,
+                            leftWrist.Value,
+                            0,
+                            sampleStep,
+                            minimumSamples,
+                            resolutionScale,
+                            now,
+                            best);
+                    }
+
+                    if (rightWristValid)
+                    {
+                        FindBestNearWrist(
+                            data,
+                            frame.Size,
+                            bytesPerPixel,
+                            rightWrist.Value,
+                            1,
+                            sampleStep,
+                            minimumSamples,
+                            resolutionScale,
+                            now,
+                            best);
+                    }
                 }
 
                 if (best.Score == float.MaxValue)
@@ -159,6 +224,9 @@ namespace CSharp_YoloOnnx
                 bounds = best.Bounds;
                 previousPoint = drawingPoint;
                 previousPointSeenAt = now;
+                activeWristIndex =
+                    best.WristIndex;
+                activeWristSeenAt = now;
                 return true;
             }
             finally
@@ -172,6 +240,7 @@ namespace CSharp_YoloOnnx
             Size frameSize,
             int bytesPerPixel,
             PointF wrist,
+            int wristIndex,
             int sampleStep,
             int minimumSamples,
             float resolutionScale,
@@ -203,6 +272,10 @@ namespace CSharp_YoloOnnx
             int requiredLength = width * height;
             EnsureBuffers(requiredLength);
             Array.Clear(mask, 0, requiredLength);
+            Array.Clear(
+                strongMask,
+                0,
+                requiredLength);
             byte* scan0 =
                 (byte*)data.Scan0.ToPointer();
 
@@ -234,11 +307,18 @@ namespace CSharp_YoloOnnx
                     byte* pixel =
                         row +
                         sourceX * bytesPerPixel;
-                    mask[gridY * width + gridX] =
+                    bool strongRed;
+                    int pixelIndex =
+                        gridY * width + gridX;
+                    mask[pixelIndex] =
                         IsRedTube(
                             pixel[2],
                             pixel[1],
-                            pixel[0]);
+                            pixel[0],
+                            out strongRed);
+                    strongMask[pixelIndex] =
+                        mask[pixelIndex] &&
+                        strongRed;
                 }
             }
 
@@ -251,21 +331,19 @@ namespace CSharp_YoloOnnx
 
                 int head = 0;
                 int tail = 0;
+                int componentMark =
+                    NextComponentMark();
                 queue[tail++] = index;
                 mask[index] = false;
                 int count = 0;
+                int strongRedCount = 0;
                 int minX = width;
                 int minY = height;
                 int maxX = 0;
                 int maxY = 0;
-                double sumX = 0d;
-                double sumY = 0d;
-                double sumXX = 0d;
-                double sumYY = 0d;
-                double sumXY = 0d;
                 float nearestSquared =
                     float.MaxValue;
-                float farthestSquared = 0f;
+                int nearestIndex = -1;
 
                 while (head < tail)
                 {
@@ -278,16 +356,17 @@ namespace CSharp_YoloOnnx
                     int sourceY =
                         region.Top +
                         gridY * sampleStep;
+                    componentMarks[current] =
+                        componentMark;
                     count++;
+
+                    if (strongMask[current])
+                        strongRedCount++;
+
                     minX = Math.Min(minX, gridX);
                     minY = Math.Min(minY, gridY);
                     maxX = Math.Max(maxX, gridX);
                     maxY = Math.Max(maxY, gridY);
-                    sumX += sourceX;
-                    sumY += sourceY;
-                    sumXX += sourceX * sourceX;
-                    sumYY += sourceY * sourceY;
-                    sumXY += sourceX * sourceY;
                     float wristDx =
                         sourceX - wrist.X;
                     float wristDy =
@@ -301,13 +380,7 @@ namespace CSharp_YoloOnnx
                     {
                         nearestSquared =
                             wristDistanceSquared;
-                    }
-
-                    if (wristDistanceSquared >
-                        farthestSquared)
-                    {
-                        farthestSquared =
-                            wristDistanceSquared;
+                        nearestIndex = current;
                     }
 
                     for (int offsetY = -1;
@@ -336,6 +409,19 @@ namespace CSharp_YoloOnnx
 
                 if (count < minimumSamples)
                     continue;
+
+                int requiredStrongRed =
+                    Math.Max(
+                        MinimumStrongRedSamples,
+                        (int)Math.Ceiling(
+                            count *
+                            MinimumStrongRedFraction));
+
+                if (strongRedCount <
+                    requiredStrongRed)
+                {
+                    continue;
+                }
 
                 int componentWidth =
                     maxX - minX + 1;
@@ -368,12 +454,6 @@ namespace CSharp_YoloOnnx
                 float nearestDistance =
                     (float)Math.Sqrt(
                         nearestSquared);
-                float farthestDistance =
-                    (float)Math.Sqrt(
-                        farthestSquared);
-                float tubeExtension =
-                    farthestDistance -
-                    nearestDistance;
 
                 if (nearestDistance >
                     MaximumWristDistance *
@@ -382,12 +462,28 @@ namespace CSharp_YoloOnnx
                     continue;
                 }
 
-                if (tubeExtension <
-                        MinimumTubeExtension *
-                        resolutionScale ||
-                    farthestDistance <
-                        MinimumTipWristDistance *
-                        resolutionScale)
+                PointF freeEndpoint;
+                float tubePathLength;
+
+                if (nearestIndex < 0 ||
+                    !TryFindPathEndpoint(
+                        nearestIndex,
+                        componentMark,
+                        tail,
+                        width,
+                        height,
+                        region,
+                        sampleStep,
+                        resolutionScale,
+                        out freeEndpoint,
+                        out tubePathLength))
+                {
+                    continue;
+                }
+
+                if (tubePathLength <
+                    MinimumTubePathLength *
+                    resolutionScale)
                 {
                     continue;
                 }
@@ -398,7 +494,7 @@ namespace CSharp_YoloOnnx
                     sampleStep;
                 float effectiveThickness =
                     sampledArea /
-                    Math.Max(1f, tubeExtension);
+                    Math.Max(1f, tubePathLength);
 
                 if (effectiveThickness >
                     MaximumTubeThickness *
@@ -406,97 +502,6 @@ namespace CSharp_YoloOnnx
                 {
                     continue;
                 }
-
-                double meanX = sumX / count;
-                double meanY = sumY / count;
-                double covarianceXX =
-                    sumXX / count -
-                    meanX * meanX;
-                double covarianceYY =
-                    sumYY / count -
-                    meanY * meanY;
-                double covarianceXY =
-                    sumXY / count -
-                    meanX * meanY;
-                double trace =
-                    covarianceXX +
-                    covarianceYY;
-                double determinant =
-                    covarianceXX *
-                    covarianceYY -
-                    covarianceXY *
-                    covarianceXY;
-                double discriminant =
-                    Math.Sqrt(
-                        Math.Max(
-                            0d,
-                            trace * trace * 0.25d -
-                            determinant));
-                double major =
-                    trace * 0.5d +
-                    discriminant;
-                double minor =
-                    Math.Max(
-                        0.25d,
-                        trace * 0.5d -
-                        discriminant);
-
-                if (major / minor <
-                    MinimumTubeElongation)
-                {
-                    continue;
-                }
-
-                float endpointDistanceThreshold =
-                    Math.Max(
-                        nearestDistance,
-                        farthestDistance -
-                        EndpointBand *
-                        resolutionScale);
-                double endpointSumX = 0d;
-                double endpointSumY = 0d;
-                int endpointCount = 0;
-
-                for (int componentIndex = 0;
-                    componentIndex < tail;
-                    componentIndex++)
-                {
-                    int current =
-                        queue[componentIndex];
-                    int gridX = current % width;
-                    int gridY = current / width;
-                    float sourceX =
-                        region.Left +
-                        gridX * sampleStep;
-                    float sourceY =
-                        region.Top +
-                        gridY * sampleStep;
-                    float dx = sourceX - wrist.X;
-                    float dy = sourceY - wrist.Y;
-                    float distance =
-                        (float)Math.Sqrt(
-                            dx * dx + dy * dy);
-
-                    if (distance <
-                        endpointDistanceThreshold)
-                    {
-                        continue;
-                    }
-
-                    endpointSumX += sourceX;
-                    endpointSumY += sourceY;
-                    endpointCount++;
-                }
-
-                if (endpointCount <= 0)
-                    continue;
-
-                PointF freeEndpoint =
-                    new PointF(
-                        (float)(endpointSumX /
-                            endpointCount),
-                        (float)(endpointSumY /
-                            endpointCount));
 
                 float temporalPenalty = 0f;
 
@@ -513,20 +518,43 @@ namespace CSharp_YoloOnnx
                     float previousDy =
                         freeEndpoint.Y -
                         previousPoint.Value.Y;
-                    temporalPenalty =
+                    float previousDistance =
                         (float)Math.Sqrt(
                             previousDx * previousDx +
-                            previousDy * previousDy) *
+                            previousDy * previousDy);
+                    double elapsedSeconds =
+                        Math.Max(
+                            0.001d,
+                            (now - previousPointSeenAt)
+                                .TotalSeconds);
+                    float maximumTrackedJump =
+                        Math.Min(
+                            TrackedMaximumJump *
+                                resolutionScale,
+                            TrackedBaseJump *
+                                resolutionScale +
+                            TrackedMaximumSpeed *
+                                resolutionScale *
+                            (float)elapsedSeconds);
+
+                    if (previousDistance >
+                        maximumTrackedJump)
+                    {
+                        continue;
+                    }
+
+                    temporalPenalty =
+                        previousDistance *
                         PreviousPointWeight;
                 }
 
                 float score =
-                    nearestDistance * 0.35f +
+                    nearestDistance * 0.80f +
                     temporalPenalty -
                     Math.Min(
                         700f * resolutionScale,
-                        tubeExtension) *
-                    0.75f +
+                        tubePathLength) *
+                    0.28f +
                     effectiveThickness * 0.60f -
                     Math.Min(
                         260f * resolutionScale,
@@ -538,6 +566,7 @@ namespace CSharp_YoloOnnx
 
                 best.Score = score;
                 best.Point = freeEndpoint;
+                best.WristIndex = wristIndex;
                 best.Bounds =
                     RectangleF.FromLTRB(
                         region.Left +
@@ -557,19 +586,156 @@ namespace CSharp_YoloOnnx
             }
         }
 
+        private bool TryFindPathEndpoint(
+            int startIndex,
+            int componentMark,
+            int componentCount,
+            int width,
+            int height,
+            Rectangle region,
+            int sampleStep,
+            float resolutionScale,
+            out PointF endpoint,
+            out float pathLength)
+        {
+            endpoint = PointF.Empty;
+            pathLength = 0f;
+
+            for (int index = 0;
+                index < componentCount;
+                index++)
+            {
+                pathDistance[queue[index]] = -1;
+            }
+
+            int head = 0;
+            int tail = 0;
+            pathQueue[tail++] = startIndex;
+            pathDistance[startIndex] = 0;
+            int maximumDistance = 0;
+
+            while (head < tail)
+            {
+                int current = pathQueue[head++];
+                int gridX = current % width;
+                int gridY = current / width;
+                int nextDistance =
+                    pathDistance[current] + 1;
+
+                for (int offsetY = -1;
+                    offsetY <= 1;
+                    offsetY++)
+                {
+                    for (int offsetX = -1;
+                        offsetX <= 1;
+                        offsetX++)
+                    {
+                        if (offsetX == 0 &&
+                            offsetY == 0)
+                        {
+                            continue;
+                        }
+
+                        EnqueuePathPixel(
+                            gridX + offsetX,
+                            gridY + offsetY,
+                            width,
+                            height,
+                            componentMark,
+                            nextDistance,
+                            ref tail);
+                    }
+                }
+
+                if (pathDistance[current] >
+                    maximumDistance)
+                {
+                    maximumDistance =
+                        pathDistance[current];
+                }
+            }
+
+            if (maximumDistance <= 0)
+                return false;
+
+            int endpointBandSteps =
+                Math.Max(
+                    1,
+                    (int)Math.Ceiling(
+                        EndpointBand *
+                        resolutionScale /
+                        sampleStep));
+            int endpointThreshold =
+                Math.Max(
+                    0,
+                    maximumDistance -
+                    endpointBandSteps);
+            double sumX = 0d;
+            double sumY = 0d;
+            int endpointCount = 0;
+
+            for (int index = 0;
+                index < componentCount;
+                index++)
+            {
+                int current = queue[index];
+
+                if (pathDistance[current] <
+                    endpointThreshold)
+                {
+                    continue;
+                }
+
+                int gridX = current % width;
+                int gridY = current / width;
+                sumX +=
+                    region.Left +
+                    gridX * sampleStep;
+                sumY +=
+                    region.Top +
+                    gridY * sampleStep;
+                endpointCount++;
+            }
+
+            if (endpointCount <= 0)
+                return false;
+
+            endpoint =
+                new PointF(
+                    (float)(sumX /
+                        endpointCount),
+                    (float)(sumY /
+                        endpointCount));
+            pathLength =
+                maximumDistance *
+                sampleStep;
+            return true;
+        }
+
         private void ResetExpiredPoint(
             DateTime now)
         {
-            if (previousPointSeenAt ==
-                    DateTime.MinValue ||
+            if (previousPointSeenAt !=
+                    DateTime.MinValue &&
                 (now - previousPointSeenAt)
-                    .TotalMilliseconds <=
+                    .TotalMilliseconds >
                 PreviousPointMemoryMs)
             {
-                return;
+                previousPoint = null;
+                previousPointSeenAt =
+                    DateTime.MinValue;
             }
 
-            Reset();
+            if (activeWristSeenAt !=
+                    DateTime.MinValue &&
+                (now - activeWristSeenAt)
+                    .TotalMilliseconds >
+                ActiveWristLockMs)
+            {
+                activeWristIndex = -1;
+                activeWristSeenAt =
+                    DateTime.MinValue;
+            }
         }
 
         private static bool IsInsideFrame(
@@ -627,7 +793,28 @@ namespace CSharp_YoloOnnx
             }
 
             mask = new bool[requiredLength];
+            strongMask = new bool[requiredLength];
             queue = new int[requiredLength];
+            pathQueue = new int[requiredLength];
+            pathDistance = new int[requiredLength];
+            componentMarks = new int[requiredLength];
+            componentGeneration = 0;
+        }
+
+        private int NextComponentMark()
+        {
+            if (componentGeneration ==
+                int.MaxValue)
+            {
+                Array.Clear(
+                    componentMarks,
+                    0,
+                    componentMarks.Length);
+                componentGeneration = 0;
+            }
+
+            componentGeneration++;
+            return componentGeneration;
         }
 
         private void EnqueueIfRed(
@@ -654,11 +841,43 @@ namespace CSharp_YoloOnnx
             queue[tail++] = index;
         }
 
+        private void EnqueuePathPixel(
+            int x,
+            int y,
+            int width,
+            int height,
+            int componentMark,
+            int distance,
+            ref int tail)
+        {
+            if (x < 0 ||
+                y < 0 ||
+                x >= width ||
+                y >= height)
+            {
+                return;
+            }
+
+            int index = y * width + x;
+
+            if (componentMarks[index] !=
+                    componentMark ||
+                pathDistance[index] >= 0)
+            {
+                return;
+            }
+
+            pathDistance[index] = distance;
+            pathQueue[tail++] = index;
+        }
+
         private static bool IsRedTube(
             byte red,
             byte green,
-            byte blue)
+            byte blue,
+            out bool strongRed)
         {
+            strongRed = false;
             float r = red / 255f;
             float g = green / 255f;
             float b = blue / 255f;
@@ -706,8 +925,20 @@ namespace CSharp_YoloOnnx
             if (hue < 0f)
                 hue += 360f;
 
-            return hue <= 30f ||
+            bool possibleRed =
+                hue <= 30f ||
                 hue >= 346f;
+
+            if (!possibleRed)
+                return false;
+
+            strongRed =
+                maximum >= 0.30f &&
+                chroma >= 0.17f &&
+                saturation >= 0.54f &&
+                (hue <= 26f ||
+                 hue >= 350f);
+            return true;
         }
     }
 }

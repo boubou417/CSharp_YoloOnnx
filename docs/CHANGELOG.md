@@ -1,5 +1,15 @@
 # 版本紀錄
 
+## V1.6.2 Locked Curved Tube Test
+
+- Replace straight-line farthest-point selection with a connected-path traversal from the wrist-side tube pixel, so a U-shaped flexible tube still returns its true free end.
+- Lock the first valid tube to the same left or right pose wrist for one second instead of allowing the tracker to swap hands every frame.
+- Reject implausible endpoint jumps before they reach the trail, preventing long lines to background candidates.
+- Tighten wrist association while using geodesic path length and effective tube thickness instead of PCA elongation, which incorrectly rejected strongly curved tubes.
+- Require a small core of strongly saturated red pixels while allowing weaker red pixels to keep shaded or motion-blurred tube sections connected.
+- Extend reliable-wrist memory and estimate a temporary wrist from the shoulder-to-elbow direction when the wrist keypoint briefly disappears.
+- Tighten the second-stage WinForms jump gate while preserving short dropout grace, interpolation, hold-to-start/finish, scoring, animation, and hidden pose overlays.
+
 ## V1.6.1 Red Tube Free Tip Test
 
 - Keep the experiment on `agent/red-tube-wrist-v1` and preserve the V1.6.0 hidden pose overlay.

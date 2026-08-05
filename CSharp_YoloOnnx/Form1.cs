@@ -60,8 +60,9 @@ namespace CSharp_YoloOnnx
         const float OpenPalmStartScore = 0.75f;
         const float OpenPalmReleaseScore = 0.50f;
         const float MinimumPoseHandKeypointScore = 0.35f;
-        const float MinimumRedTubeWristScore = 0.25f;
-        const int RedTubeWristGraceMs = 250;
+        const float MinimumRedTubeWristScore = 0.20f;
+        const float MinimumRedTubeArmScore = 0.30f;
+        const int RedTubeWristGraceMs = 900;
         const float MinimumIdleHandPresence = 0.35f;
         const float MinimumDrawingHandPresence = 0.45f;
         const int YellowStartHoldMs = 600;
@@ -81,6 +82,9 @@ namespace CSharp_YoloOnnx
         const float YellowFastMotionDistance = 60f;
         const float YellowInterpolationSpacing = 16f;
         const float YellowStartMoveDistance = 40f;
+        const float RedTubeBaseFrameJump = 55f;
+        const float RedTubeMaximumSpeedPixelsPerSecond = 3800f;
+        const float RedTubeMaximumAdaptiveJump = 260f;
 
         DateTime drawingFinishedAt = DateTime.MinValue;
         DateTime fingertipMissingSince = DateTime.MinValue;
@@ -297,7 +301,7 @@ namespace CSharp_YoloOnnx
         {
             InitializeComponent();
 
-            Text = "CSharp YOLO ONNX V1.6.1 Red Tube Free Tip Test";
+            Text = "CSharp YOLO ONNX V1.6.2 Locked Curved Tube Test";
             panelToolBar.Dock = DockStyle.Top;
             panelToolBar.Height = 40;
             panelStatusBar.Dock = DockStyle.Bottom;
@@ -329,7 +333,7 @@ namespace CSharp_YoloOnnx
             string modelPath = "yolov8n-pose.onnx";
             InitializeYoloSession(modelPath);
             Text =
-                "CSharp YOLO ONNX V1.6.1 Red Tube Free Tip Test | " +
+                "CSharp YOLO ONNX V1.6.2 Locked Curved Tube Test | " +
                 yoloExecutionProvider;
         }
 
@@ -1720,11 +1724,11 @@ namespace CSharp_YoloOnnx
                                 .TotalMilliseconds);
                 float maximumJump =
                     Math.Min(
-                        YellowMaximumAdaptiveJump *
+                        RedTubeMaximumAdaptiveJump *
                             trackingScale,
-                        YellowBaseFrameJump *
+                        RedTubeBaseFrameJump *
                             trackingScale +
-                        YellowMaximumSpeedPixelsPerSecond *
+                        RedTubeMaximumSpeedPixelsPerSecond *
                             trackingScale *
                         (float)elapsedMilliseconds /
                             1000f);
@@ -2458,7 +2462,7 @@ namespace CSharp_YoloOnnx
         {
             if (redTubeWristMode)
             {
-                return "紅管靠近任一手腕｜停留 0.6 秒開始｜畫完停留 0.9 秒完成";
+                return "握住紅管並鎖定自由端｜停留 0.6 秒開始｜畫完停留 0.9 秒完成";
             }
 
             return "黃色筆尖停留 0.6 秒開始｜畫完停留 0.9 秒完成";
@@ -3046,49 +3050,36 @@ namespace CSharp_YoloOnnx
                 person.Keypoints.Count > 10 &&
                 _ratio > 0f)
             {
-                Keypoint leftKeypoint =
-                    person.Keypoints[9];
-                Keypoint rightKeypoint =
-                    person.Keypoints[10];
+                PointF point;
 
-                if (leftKeypoint.Score >=
-                    MinimumRedTubeWristScore)
+                if (TryGetRedTubeWrist(
+                    person,
+                    frameSize,
+                    5,
+                    7,
+                    9,
+                    out point))
                 {
-                    PointF point =
-                        KeypointToImagePoint(
-                            leftKeypoint);
-
-                    if (point.X >= 0f &&
-                        point.Y >= 0f &&
-                        point.X < frameSize.Width &&
-                        point.Y < frameSize.Height)
-                    {
-                        leftWrist = point;
-                        lastReliableLeftRedTubeWrist =
-                            point;
-                        lastLeftRedTubeWristSeenAt =
-                            now;
-                    }
+                    leftWrist = point;
+                    lastReliableLeftRedTubeWrist =
+                        point;
+                    lastLeftRedTubeWristSeenAt =
+                        now;
                 }
 
-                if (rightKeypoint.Score >=
-                    MinimumRedTubeWristScore)
+                if (TryGetRedTubeWrist(
+                    person,
+                    frameSize,
+                    6,
+                    8,
+                    10,
+                    out point))
                 {
-                    PointF point =
-                        KeypointToImagePoint(
-                            rightKeypoint);
-
-                    if (point.X >= 0f &&
-                        point.Y >= 0f &&
-                        point.X < frameSize.Width &&
-                        point.Y < frameSize.Height)
-                    {
-                        rightWrist = point;
-                        lastReliableRightRedTubeWrist =
-                            point;
-                        lastRightRedTubeWristSeenAt =
-                            now;
-                    }
+                    rightWrist = point;
+                    lastReliableRightRedTubeWrist =
+                        point;
+                    lastRightRedTubeWristSeenAt =
+                        now;
                 }
             }
 
@@ -3115,6 +3106,62 @@ namespace CSharp_YoloOnnx
                 rightWrist =
                     lastReliableRightRedTubeWrist;
             }
+        }
+
+        private bool TryGetRedTubeWrist(
+            Detection person,
+            Size frameSize,
+            int shoulderIndex,
+            int elbowIndex,
+            int wristIndex,
+            out PointF wrist)
+        {
+            wrist = PointF.Empty;
+            Keypoint wristKeypoint =
+                person.Keypoints[wristIndex];
+
+            if (wristKeypoint.Score >=
+                MinimumRedTubeWristScore)
+            {
+                wrist =
+                    KeypointToImagePoint(
+                        wristKeypoint);
+            }
+            else
+            {
+                Keypoint elbowKeypoint =
+                    person.Keypoints[elbowIndex];
+                Keypoint shoulderKeypoint =
+                    person.Keypoints[shoulderIndex];
+
+                if (elbowKeypoint.Score <
+                        MinimumRedTubeArmScore ||
+                    shoulderKeypoint.Score <
+                        MinimumRedTubeArmScore)
+                {
+                    return false;
+                }
+
+                PointF elbow =
+                    KeypointToImagePoint(
+                        elbowKeypoint);
+                PointF shoulder =
+                    KeypointToImagePoint(
+                        shoulderKeypoint);
+                wrist =
+                    new PointF(
+                        elbow.X +
+                            (elbow.X - shoulder.X) *
+                            0.80f,
+                        elbow.Y +
+                            (elbow.Y - shoulder.Y) *
+                            0.80f);
+            }
+
+            return wrist.X >= 0f &&
+                wrist.Y >= 0f &&
+                wrist.X < frameSize.Width &&
+                wrist.Y < frameSize.Height;
         }
 
         private float GetMaximumFingertipJump(Detection person)
