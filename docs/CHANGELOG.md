@@ -1,5 +1,16 @@
 # 版本紀錄
 
+## V1.5.11 Generic Shape Scoring Test
+
+- Replace the wide 10-pixel binary hit test with a continuous, bidirectional centerline-distance score.
+- Remove tiny foreground components before normalization so template speckles do not stretch the comparison bounds.
+- Thin both the drawing and the selected template to one-pixel centerlines so stroke thickness does not dominate the result.
+- Combine fine and broad distance falloff, strict two-way coverage, 90th-percentile outlier distance, and normalized path-length balance.
+- Apply nonlinear score calibration to push unrelated scribbles lower while preserving high scores for close shapes.
+- Derive every comparison feature from the currently selected image; no star-specific corners, intersections, or stroke order are hard-coded.
+- Continue ignoring original position and size, drawing start point, drawing direction, and small hand-angle differences.
+- Keep the existing green/orange/red score bands, CUDA/CPU fallback, locked yellow tracking, drawing storage, and animation behavior.
+
 ## V1.5.10 Locked Yellow Tracking Test
 
 - Add explicit searching and locked marker states.
