@@ -285,7 +285,7 @@ namespace CSharp_YoloOnnx
         {
             InitializeComponent();
 
-            Text = "CSharp YOLO ONNX V1.5.14 Red-Yellow Pair Gate";
+            Text = "CSharp YOLO ONNX V1.5.13 Live GPU Diagnostics";
             panelToolBar.Dock = DockStyle.Top;
             panelToolBar.Height = 40;
             panelStatusBar.Dock = DockStyle.Bottom;
@@ -316,7 +316,7 @@ namespace CSharp_YoloOnnx
             string modelPath = "yolov8n-pose.onnx";
             InitializeYoloSession(modelPath);
             Text =
-                "CSharp YOLO ONNX V1.5.14 Red-Yellow Pair Gate | " +
+                "CSharp YOLO ONNX V1.5.13 Live GPU Diagnostics | " +
                 yoloExecutionProvider;
         }
 
@@ -1590,27 +1590,6 @@ namespace CSharp_YoloOnnx
 
             candidateVisible = true;
             yellowRawMissingSince = DateTime.MinValue;
-
-            if (yellowTipTracker.LastDetectionStartedNewLock)
-            {
-                // A true-loss reacquisition starts a new stroke and must
-                // pass the stationary confirmation again. This prevents
-                // interpolation from drawing a line across an off-screen
-                // interval or an unconfirmed background candidate.
-                yellowTrackingConfirmed = false;
-                yellowCandidateStartedAt =
-                    DateTime.MinValue;
-                yellowCandidateAnchor = null;
-                filteredYellowTip = null;
-                lastYellowAcceptedAt =
-                    DateTime.MinValue;
-
-                if (gameState == GameState.Drawing)
-                {
-                    drawingStrokeStartPending = true;
-                    lastFingertipPoint = null;
-                }
-            }
 
             if (!yellowTrackingConfirmed)
             {

@@ -1,16 +1,5 @@
 # 版本紀錄
 
-## V1.5.14 Red-Yellow Pair Gate Test
-
-- Require a compact yellow tip to sit at the endpoint of a connected, elongated red tube before acquiring or refreshing a strong marker lock.
-- Prefer a valid red/yellow pair over larger yellow-only background components.
-- Limit yellow-only tracking to a 120 ms motion-blur grace near the predicted position; it cannot approve a large jump or a frame-edge handoff.
-- Reuse the previously inactive red/yellow timestamp so a background yellow object cannot maintain the marker lock indefinitely.
-- Scale red contact/search geometry from the observed yellow component and cap megapixel-only expansion for wide-angle 5 MP cameras.
-- Start a new trajectory stroke after a true-loss reacquisition so no interpolated line crosses an off-screen or unconfirmed interval.
-- Tighten the warm-orange/yellow hue boundary while preserving the red-orange flexible tube range.
-- Preserve V1.5.13 CUDA/CPU diagnostics and V1.5.12 generic shape scoring.
-
 ## V1.5.13 Live GPU Diagnostics Test
 
 - Restore the independent WinForms diagnostics label at the bottom-right of the window.

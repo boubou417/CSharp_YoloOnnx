@@ -26,16 +26,13 @@ namespace CSharp_YoloOnnx
         private const float PendingMatchDiagonalRatio = 0.040f;
         private const float MaximumConfirmedStepDiagonalRatio = 0.20f;
         private const int LockedYellowLossMs = 450;
-        private const int YellowOnlyPairGraceMs = 120;
-        private const float YellowOnlyPredictionDiagonalRatio = 0.025f;
         private const float RedSearchRadius = 60f;
-        private const float RedContactDistance = 24f;
+        private const float RedContactDistance = 20f;
         private const int MinimumRedFullFrameSamples = 4;
         private const int MinimumRedRoiSamples = 12;
         private const float MinimumRedTubeSpan = 24f;
         private const float MaximumRedTubeFillRatio = 0.62f;
         private const float MinimumRedTubeElongation = 1.8f;
-        private const float MinimumRedEndpointAlignment = 0.45f;
         private const float MaximumYellowComponentSpan = 180f;
 
         private bool[] mask;
@@ -52,23 +49,9 @@ namespace CSharp_YoloOnnx
         private DateTime lockedYellowMissingSince =
             DateTime.MinValue;
 
-        public bool LastDetectionStartedNewLock
-        {
-            get;
-            private set;
-        }
-
-        public bool LastDetectionHasRedSupport
-        {
-            get;
-            private set;
-        }
-
         public void Reset()
         {
             ReleaseMarkerLock();
-            LastDetectionStartedNewLock = false;
-            LastDetectionHasRedSupport = false;
         }
 
         public unsafe bool TryDetect(
@@ -78,8 +61,6 @@ namespace CSharp_YoloOnnx
         {
             tip = PointF.Empty;
             bounds = RectangleF.Empty;
-            LastDetectionStartedNewLock = false;
-            LastDetectionHasRedSupport = false;
 
             if (frame == null ||
                 frame.Width < FullFrameSampleStep ||
@@ -107,12 +88,6 @@ namespace CSharp_YoloOnnx
                 DateTime now = DateTime.UtcNow;
                 float resolutionScale =
                     GetResolutionScale(frame.Size);
-                // High-megapixel wide-angle cameras show more pixels but
-                // do not necessarily make the physical marker larger.
-                // Bound geometric expansion until the observed component
-                // size can constrain red/yellow pairing directly.
-                float geometryScale =
-                    Math.Min(1.25f, resolutionScale);
                 bool hasPrediction =
                     previousPoint.HasValue &&
                     previousPointSeenAt != DateTime.MinValue &&
@@ -142,10 +117,10 @@ namespace CSharp_YoloOnnx
                             velocityPixelsPerMillisecond.Y);
                     float minimumRoiRadius =
                         MinimumRoiRadius *
-                        geometryScale;
+                        resolutionScale;
                     float maximumRoiRadius =
                         MaximumRoiRadius *
-                        geometryScale;
+                        resolutionScale;
                     float radius =
                         Math.Max(
                             minimumRoiRadius,
@@ -160,7 +135,6 @@ namespace CSharp_YoloOnnx
                             prediction,
                             radius,
                             frame.Size);
-                    bool hasRedSupport;
 
                     if (TryFindYellowComponent(
                         data,
@@ -170,30 +144,17 @@ namespace CSharp_YoloOnnx
                         RoiSampleStep,
                         MinimumRoiSamples,
                         prediction,
-                        geometryScale,
+                        resolutionScale,
                         true,
                         now,
                         out tip,
-                        out bounds,
-                        out hasRedSupport) &&
-                        CanUseLockedCandidate(
-                            tip,
-                            bounds,
-                            prediction,
-                            hasRedSupport,
-                            now,
-                            frame.Size) &&
+                        out bounds) &&
                         AcceptMotionCandidate(
                             tip,
                             now,
-                            frame.Size,
-                            hasRedSupport))
+                            frame.Size))
                     {
-                        ConfirmMarkerLock(
-                            hasRedSupport,
-                            now);
-                        LastDetectionHasRedSupport =
-                            hasRedSupport;
+                        ConfirmMarkerLock();
                         UpdateMotion(tip, now);
                         return true;
                     }
@@ -214,8 +175,6 @@ namespace CSharp_YoloOnnx
                 // Searching and true-loss reacquisition remain strict:
                 // a compact yellow marker must have connected red-tube
                 // support before it can establish a new lock.
-                bool reacquiredWithRedSupport;
-
                 if (TryFindYellowComponent(
                     data,
                     frame.Size,
@@ -224,24 +183,17 @@ namespace CSharp_YoloOnnx
                     FullFrameSampleStep,
                     MinimumFullFrameSamples,
                     PointF.Empty,
-                    geometryScale,
+                    resolutionScale,
                     false,
                     now,
                     out tip,
-                    out bounds,
-                    out reacquiredWithRedSupport) &&
+                    out bounds) &&
                     AcceptMotionCandidate(
                         tip,
                         now,
-                        frame.Size,
-                        reacquiredWithRedSupport))
+                        frame.Size))
                 {
-                    ConfirmMarkerLock(
-                        reacquiredWithRedSupport,
-                        now);
-                    LastDetectionStartedNewLock = true;
-                    LastDetectionHasRedSupport =
-                        reacquiredWithRedSupport;
+                    ConfirmMarkerLock();
                     UpdateMotion(tip, now);
                     return true;
                 }
@@ -256,75 +208,11 @@ namespace CSharp_YoloOnnx
             }
         }
 
-        private void ConfirmMarkerLock(
-            bool hasRedSupport,
-            DateTime now)
+        private void ConfirmMarkerLock()
         {
             markerLocked = true;
             lockedYellowMissingSince =
                 DateTime.MinValue;
-
-            if (hasRedSupport)
-                lastRedYellowPairSeenAt = now;
-        }
-
-        private bool CanUseLockedCandidate(
-            PointF candidate,
-            RectangleF candidateBounds,
-            PointF prediction,
-            bool hasRedSupport,
-            DateTime now,
-            Size frameSize)
-        {
-            if (hasRedSupport)
-                return true;
-
-            if (lastRedYellowPairSeenAt ==
-                    DateTime.MinValue ||
-                (now - lastRedYellowPairSeenAt)
-                    .TotalMilliseconds >
-                YellowOnlyPairGraceMs)
-            {
-                return false;
-            }
-
-            float markerSpan =
-                Math.Max(
-                    candidateBounds.Width,
-                    candidateBounds.Height);
-            float edgeMargin =
-                Math.Max(8f, markerSpan * 0.75f);
-
-            // A marker leaving the image must not hand its lock to a
-            // similarly coloured object along the frame boundary.
-            if (candidate.X <= edgeMargin ||
-                candidate.Y <= edgeMargin ||
-                candidate.X >=
-                    frameSize.Width - edgeMargin ||
-                candidate.Y >=
-                    frameSize.Height - edgeMargin)
-            {
-                return false;
-            }
-
-            float dx = candidate.X - prediction.X;
-            float dy = candidate.Y - prediction.Y;
-            float predictionError =
-                (float)Math.Sqrt(dx * dx + dy * dy);
-            float diagonal =
-                (float)Math.Sqrt(
-                    frameSize.Width * frameSize.Width +
-                    frameSize.Height * frameSize.Height);
-            float maximumPredictionError =
-                Math.Max(
-                    32f,
-                    Math.Min(
-                        diagonal *
-                            YellowOnlyPredictionDiagonalRatio,
-                        Math.Max(32f, markerSpan * 3f)));
-
-            return predictionError <=
-                maximumPredictionError;
         }
 
         private bool ShouldKeepMarkerLock(
@@ -372,12 +260,10 @@ namespace CSharp_YoloOnnx
             bool allowYellowOnly,
             DateTime now,
             out PointF tip,
-            out RectangleF bounds,
-            out bool selectedHasRedSupport)
+            out RectangleF bounds)
         {
             tip = PointF.Empty;
             bounds = RectangleF.Empty;
-            selectedHasRedSupport = false;
             minimumSamples =
                 ScaleSampleCount(
                     minimumSamples,
@@ -591,21 +477,8 @@ namespace CSharp_YoloOnnx
                             normalizedCount * 0.25f)
                         : -12f);
 
-                bool improvesPairClass =
-                    hasRedSupport &&
-                    !bestHasRedSupport;
-                bool losesPairClass =
-                    !hasRedSupport &&
-                    bestHasRedSupport;
-
-                // A geometrically valid red/yellow pair always wins over
-                // a larger yellow-only background component.
-                if (losesPairClass ||
-                    (!improvesPairClass &&
-                     score <= bestScore))
-                {
+                if (score <= bestScore)
                     continue;
-                }
 
                 bestScore = score;
                 bestCount = count;
@@ -620,6 +493,11 @@ namespace CSharp_YoloOnnx
 
             if (bestCount < minimumSamples)
                 return false;
+
+            // Only the candidate actually selected as the marker may refresh
+            // the short red-tube occlusion allowance.
+            if (bestHasRedSupport)
+                lastRedYellowPairSeenAt = now;
 
             tip = new PointF(
                 searchRegion.Left +
@@ -643,8 +521,6 @@ namespace CSharp_YoloOnnx
                     searchRegion.Top +
                     (bestMaxY + 1) *
                     sampleStep));
-            selectedHasRedSupport =
-                bestHasRedSupport;
             return true;
         }
 
@@ -662,31 +538,15 @@ namespace CSharp_YoloOnnx
                 ScaleSampleCount(
                     minimumSamples,
                     resolutionScale);
-            float yellowSpan =
-                Math.Max(
-                    yellowBounds.Width,
-                    yellowBounds.Height);
             float redSearchRadius =
-                Math.Max(
-                    48f,
-                    Math.Min(
-                        RedSearchRadius *
-                            resolutionScale,
-                        Math.Max(48f, yellowSpan * 4f)));
+                RedSearchRadius *
+                resolutionScale;
             float redContactDistance =
-                Math.Max(
-                    6f,
-                    Math.Min(
-                        RedContactDistance *
-                            resolutionScale,
-                        Math.Max(6f, yellowSpan * 0.85f)));
+                RedContactDistance *
+                resolutionScale;
             float minimumRedTubeSpan =
-                Math.Max(
-                    18f,
-                    Math.Min(
-                        MinimumRedTubeSpan *
-                            resolutionScale,
-                        Math.Max(18f, yellowSpan * 2.2f)));
+                MinimumRedTubeSpan *
+                resolutionScale;
             Rectangle region = Rectangle.Intersect(
                 new Rectangle(0, 0, frameSize.Width, frameSize.Height),
                 Rectangle.FromLTRB(
@@ -856,105 +716,6 @@ namespace CSharp_YoloOnnx
                 if (elongation < MinimumRedTubeElongation)
                     continue;
 
-                double axisX;
-                double axisY;
-
-                if (Math.Abs(covarianceXY) > 0.000001d)
-                {
-                    axisX = major - covarianceYY;
-                    axisY = covarianceXY;
-                }
-                else if (covarianceXX >= covarianceYY)
-                {
-                    axisX = 1d;
-                    axisY = 0d;
-                }
-                else
-                {
-                    axisX = 0d;
-                    axisY = 1d;
-                }
-
-                double axisLength =
-                    Math.Sqrt(
-                        axisX * axisX +
-                        axisY * axisY);
-
-                if (axisLength <= 0.000001d)
-                    continue;
-
-                axisX /= axisLength;
-                axisY /= axisLength;
-                double minimumProjection =
-                    double.MaxValue;
-                double maximumProjection =
-                    double.MinValue;
-
-                for (int queueIndex = 0;
-                    queueIndex < tail;
-                    queueIndex++)
-                {
-                    int redIndex =
-                        redQueue[queueIndex];
-                    int redX =
-                        region.Left +
-                        redIndex % width * sampleStep;
-                    int redY =
-                        region.Top +
-                        redIndex / width * sampleStep;
-                    double projection =
-                        (redX - meanX) * axisX +
-                        (redY - meanY) * axisY;
-                    minimumProjection =
-                        Math.Min(
-                            minimumProjection,
-                            projection);
-                    maximumProjection =
-                        Math.Max(
-                            maximumProjection,
-                            projection);
-                }
-
-                double yellowFromMeanX =
-                    yellowCenter.X - meanX;
-                double yellowFromMeanY =
-                    yellowCenter.Y - meanY;
-                double yellowCenterDistance =
-                    Math.Sqrt(
-                        yellowFromMeanX * yellowFromMeanX +
-                        yellowFromMeanY * yellowFromMeanY);
-                double yellowProjection =
-                    yellowFromMeanX * axisX +
-                    yellowFromMeanY * axisY;
-                double endpointTolerance =
-                    Math.Max(
-                        redContactDistance,
-                        yellowSpan * 0.75f);
-                bool nearPositiveEndpoint =
-                    yellowProjection >=
-                    maximumProjection -
-                    endpointTolerance;
-                bool nearNegativeEndpoint =
-                    yellowProjection <=
-                    minimumProjection +
-                    endpointTolerance;
-                double endpointAlignment =
-                    yellowCenterDistance <= 0.000001d
-                        ? 0d
-                        : Math.Abs(yellowProjection) /
-                          yellowCenterDistance;
-
-                // The yellow component must sit at an end of the long red
-                // component. Merely having unrelated warm pixels nearby is
-                // not enough to establish or refresh the marker lock.
-                if ((!nearPositiveEndpoint &&
-                     !nearNegativeEndpoint) ||
-                    endpointAlignment <
-                    MinimumRedEndpointAlignment)
-                {
-                    continue;
-                }
-
                 return true;
             }
 
@@ -996,8 +757,7 @@ namespace CSharp_YoloOnnx
         private bool AcceptMotionCandidate(
             PointF candidate,
             DateTime now,
-            Size frameSize,
-            bool hasRedSupport)
+            Size frameSize)
         {
             if (!previousPoint.HasValue ||
                 previousPointSeenAt == DateTime.MinValue ||
@@ -1088,14 +848,6 @@ namespace CSharp_YoloOnnx
             {
                 ClearPendingJump();
                 return true;
-            }
-
-            // Yellow-only tracking is a very short blur/occlusion grace.
-            // It may never authorize a large jump to a background object.
-            if (!hasRedSupport)
-            {
-                ClearPendingJump();
-                return false;
             }
 
             if (pendingJumpPoint.HasValue &&
@@ -1401,8 +1153,8 @@ namespace CSharp_YoloOnnx
             if (hue < 0f)
                 hue += 360f;
 
-            return hue >= 42f &&
-                hue <= 76f;
+            return hue >= 36f &&
+                hue <= 78f;
         }
     }
 }
