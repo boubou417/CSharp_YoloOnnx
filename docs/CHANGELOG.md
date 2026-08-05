@@ -1,5 +1,15 @@
 # 版本紀錄
 
+## V1.5.12 Calibrated Shape Scoring Test
+
+- Keep the V1.5.11 centerline distance, two-way coverage, outlier, and path-length comparison unchanged.
+- Replace the aggressive linear-and-power score mapping with a normalized logistic calibration curve.
+- Expand the recognizable middle range so human-drawn shapes are not compressed into 30–50 points.
+- Keep low raw similarities near zero so unrelated drawings do not receive the same score increase.
+- Calibrate against the supplied hand-drawn star: approximately 43 points becomes approximately 67 points.
+- Preserve template-independent comparison; no star-specific geometry or stroke sequence is introduced.
+- Preserve locked yellow tracking, CUDA/CPU fallback, drawing storage, score colors, and animation behavior.
+
 ## V1.5.11 Generic Shape Scoring Test
 
 - Replace the wide 10-pixel binary hit test with a continuous, bidirectional centerline-distance score.

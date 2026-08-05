@@ -282,7 +282,7 @@ namespace CSharp_YoloOnnx
         {
             InitializeComponent();
 
-            Text = "CSharp YOLO ONNX V1.5.11 Generic Shape Scoring";
+            Text = "CSharp YOLO ONNX V1.5.12 Calibrated Shape Scoring";
             panelToolBar.Dock = DockStyle.Top;
             panelToolBar.Height = 40;
             panelStatusBar.Dock = DockStyle.Bottom;
@@ -313,7 +313,7 @@ namespace CSharp_YoloOnnx
             string modelPath = "yolov8n-pose.onnx";
             InitializeYoloSession(modelPath);
             Text =
-                "CSharp YOLO ONNX V1.5.11 Generic Shape Scoring | " +
+                "CSharp YOLO ONNX V1.5.12 Calibrated Shape Scoring | " +
                 yoloExecutionProvider;
         }
 

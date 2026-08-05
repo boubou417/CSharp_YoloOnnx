@@ -361,9 +361,8 @@ namespace CSharp_YoloOnnx
         private const double FineDistanceSigma = 5d;
         private const double BroadDistanceSigma = 13d;
         private const double StrictCoverageDistance = 5d;
-        private const double CalibrationFloor = 0.20d;
-        private const double CalibrationCeiling = 0.90d;
-        private const double CalibrationPower = 1.15d;
+        private const double CalibrationMidpoint = 0.48d;
+        private const double CalibrationSteepness = 14d;
         private const double DiagonalDistance = 1.4142135623730951d;
         private const double InfiniteDistance = 1000000d;
         private static readonly float[] RotationCandidates =
@@ -456,12 +455,21 @@ namespace CSharp_YoloOnnx
 
         private static double CalibrateScore(double rawScore)
         {
-            double normalized =
-                (rawScore - CalibrationFloor) /
-                (CalibrationCeiling - CalibrationFloor);
+            double minimum = LogisticCalibration(0d);
+            double maximum = LogisticCalibration(1d);
+            double calibrated =
+                (LogisticCalibration(Clamp01(rawScore)) - minimum) /
+                (maximum - minimum);
 
-            normalized = Clamp01(normalized);
-            return Math.Pow(normalized, CalibrationPower) * 100d;
+            return Clamp01(calibrated) * 100d;
+        }
+
+        private static double LogisticCalibration(double rawScore)
+        {
+            return 1d /
+                (1d + Math.Exp(
+                    -CalibrationSteepness *
+                    (rawScore - CalibrationMidpoint)));
         }
 
         private static double HarmonicMean(double first, double second)
