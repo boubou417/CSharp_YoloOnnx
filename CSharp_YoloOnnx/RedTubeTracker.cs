@@ -5,24 +5,28 @@ using System.Drawing.Imaging;
 namespace CSharp_YoloOnnx
 {
     /// <summary>
-    /// Finds a thin red tube near either pose wrist and returns the red
-    /// component point closest to that wrist. The wrist association keeps
-    /// unrelated red objects in a wide-angle background from becoming the
-    /// drawing point.
+    /// Finds a thin red tube associated with either pose wrist and returns
+    /// the free tube endpoint farthest from that wrist. The wrist is used
+    /// only to identify the held tube; it is never used as the drawing end.
     /// </summary>
     public sealed class RedTubeTracker
     {
         private const double ReferencePixelCount = 1600000d;
-        private const double HighResolutionPixelCount = 3000000d;
-        private const float SearchRadius = 220f;
-        private const float MaximumWristDistance = 135f;
+        private const double HighResolutionPixelCount = 1000000d;
+        private const double VeryHighResolutionPixelCount = 4200000d;
+        private const float SearchRadius = 650f;
+        private const float MaximumWristDistance = 360f;
         private const int MinimumFullResolutionSamples = 32;
-        private const int MinimumHighResolutionSamples = 12;
-        private const float MinimumTubeSpan = 22f;
-        private const float MaximumTubeFillRatio = 0.62f;
-        private const float MinimumTubeElongation = 1.60f;
-        private const int PreviousPointMemoryMs = 300;
-        private const float PreviousPointWeight = 0.18f;
+        private const int MinimumSampledSamples = 10;
+        private const float MinimumTubeSpan = 75f;
+        private const float MinimumTubeExtension = 150f;
+        private const float MinimumTipWristDistance = 220f;
+        private const float MaximumTubeFillRatio = 0.50f;
+        private const float MinimumTubeElongation = 3.00f;
+        private const float MaximumTubeThickness = 40f;
+        private const float EndpointBand = 14f;
+        private const int PreviousPointMemoryMs = 450;
+        private const float PreviousPointWeight = 0.22f;
 
         private bool[] mask;
         private int[] queue;
@@ -94,17 +98,21 @@ namespace CSharp_YoloOnnx
                         ReferencePixelCount);
                 resolutionScale =
                     Math.Max(
-                        0.80f,
-                        Math.Min(1.40f, resolutionScale));
+                        0.70f,
+                        Math.Min(2.00f, resolutionScale));
                 int sampleStep =
                     pixelCount >=
-                        HighResolutionPixelCount
-                        ? 2
-                        : 1;
+                        VeryHighResolutionPixelCount
+                        ? 3
+                        : pixelCount >=
+                            HighResolutionPixelCount
+                            ? 2
+                            : 1;
                 int minimumSamples =
-                    sampleStep == 1
-                        ? MinimumFullResolutionSamples
-                        : MinimumHighResolutionSamples;
+                    Math.Max(
+                        MinimumSampledSamples,
+                        MinimumFullResolutionSamples /
+                        (sampleStep * sampleStep));
                 Candidate best = new Candidate();
 
                 if (leftWrist.HasValue &&
@@ -257,8 +265,7 @@ namespace CSharp_YoloOnnx
                 double sumXY = 0d;
                 float nearestSquared =
                     float.MaxValue;
-                PointF nearestPoint =
-                    PointF.Empty;
+                float farthestSquared = 0f;
 
                 while (head < tail)
                 {
@@ -294,10 +301,13 @@ namespace CSharp_YoloOnnx
                     {
                         nearestSquared =
                             wristDistanceSquared;
-                        nearestPoint =
-                            new PointF(
-                                sourceX,
-                                sourceY);
+                    }
+
+                    if (wristDistanceSquared >
+                        farthestSquared)
+                    {
+                        farthestSquared =
+                            wristDistanceSquared;
                     }
 
                     for (int offsetY = -1;
@@ -358,9 +368,40 @@ namespace CSharp_YoloOnnx
                 float nearestDistance =
                     (float)Math.Sqrt(
                         nearestSquared);
+                float farthestDistance =
+                    (float)Math.Sqrt(
+                        farthestSquared);
+                float tubeExtension =
+                    farthestDistance -
+                    nearestDistance;
 
                 if (nearestDistance >
                     MaximumWristDistance *
+                    resolutionScale)
+                {
+                    continue;
+                }
+
+                if (tubeExtension <
+                        MinimumTubeExtension *
+                        resolutionScale ||
+                    farthestDistance <
+                        MinimumTipWristDistance *
+                        resolutionScale)
+                {
+                    continue;
+                }
+
+                float sampledArea =
+                    count *
+                    sampleStep *
+                    sampleStep;
+                float effectiveThickness =
+                    sampledArea /
+                    Math.Max(1f, tubeExtension);
+
+                if (effectiveThickness >
+                    MaximumTubeThickness *
                     resolutionScale)
                 {
                     continue;
@@ -406,6 +447,57 @@ namespace CSharp_YoloOnnx
                     continue;
                 }
 
+                float endpointDistanceThreshold =
+                    Math.Max(
+                        nearestDistance,
+                        farthestDistance -
+                        EndpointBand *
+                        resolutionScale);
+                double endpointSumX = 0d;
+                double endpointSumY = 0d;
+                int endpointCount = 0;
+
+                for (int componentIndex = 0;
+                    componentIndex < tail;
+                    componentIndex++)
+                {
+                    int current =
+                        queue[componentIndex];
+                    int gridX = current % width;
+                    int gridY = current / width;
+                    float sourceX =
+                        region.Left +
+                        gridX * sampleStep;
+                    float sourceY =
+                        region.Top +
+                        gridY * sampleStep;
+                    float dx = sourceX - wrist.X;
+                    float dy = sourceY - wrist.Y;
+                    float distance =
+                        (float)Math.Sqrt(
+                            dx * dx + dy * dy);
+
+                    if (distance <
+                        endpointDistanceThreshold)
+                    {
+                        continue;
+                    }
+
+                    endpointSumX += sourceX;
+                    endpointSumY += sourceY;
+                    endpointCount++;
+                }
+
+                if (endpointCount <= 0)
+                    continue;
+
+                PointF freeEndpoint =
+                    new PointF(
+                        (float)(endpointSumX /
+                            endpointCount),
+                        (float)(endpointSumY /
+                            endpointCount));
+
                 float temporalPenalty = 0f;
 
                 if (previousPoint.HasValue &&
@@ -416,10 +508,10 @@ namespace CSharp_YoloOnnx
                     PreviousPointMemoryMs)
                 {
                     float previousDx =
-                        nearestPoint.X -
+                        freeEndpoint.X -
                         previousPoint.Value.X;
                     float previousDy =
-                        nearestPoint.Y -
+                        freeEndpoint.Y -
                         previousPoint.Value.Y;
                     temporalPenalty =
                         (float)Math.Sqrt(
@@ -429,16 +521,23 @@ namespace CSharp_YoloOnnx
                 }
 
                 float score =
-                    nearestDistance +
+                    nearestDistance * 0.35f +
                     temporalPenalty -
-                    Math.Min(160f, span) *
-                    0.03f;
+                    Math.Min(
+                        700f * resolutionScale,
+                        tubeExtension) *
+                    0.75f +
+                    effectiveThickness * 0.60f -
+                    Math.Min(
+                        260f * resolutionScale,
+                        span) *
+                    0.05f;
 
                 if (score >= best.Score)
                     continue;
 
                 best.Score = score;
-                best.Point = nearestPoint;
+                best.Point = freeEndpoint;
                 best.Bounds =
                     RectangleF.FromLTRB(
                         region.Left +
@@ -569,8 +668,8 @@ namespace CSharp_YoloOnnx
                 Math.Min(r, Math.Min(g, b));
             float chroma = maximum - minimum;
 
-            if (maximum < 0.30f ||
-                chroma < 0.16f)
+            if (maximum < 0.24f ||
+                chroma < 0.12f)
             {
                 return false;
             }
@@ -580,7 +679,7 @@ namespace CSharp_YoloOnnx
                     ? 0f
                     : chroma / maximum;
 
-            if (saturation < 0.52f)
+            if (saturation < 0.44f)
                 return false;
 
             float hue;
@@ -607,8 +706,8 @@ namespace CSharp_YoloOnnx
             if (hue < 0f)
                 hue += 360f;
 
-            return hue <= 24f ||
-                hue >= 348f;
+            return hue <= 30f ||
+                hue >= 346f;
         }
     }
 }

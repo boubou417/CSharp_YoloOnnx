@@ -1,5 +1,14 @@
 # 版本紀錄
 
+## V1.6.1 Red Tube Free Tip Test
+
+- Keep the experiment on `agent/red-tube-wrist-v1` and preserve the V1.6.0 hidden pose overlay.
+- Use a pose wrist only to associate the held tube, then return the red component endpoint farthest from that wrist.
+- Expand and resolution-scale the wrist search area so the free end remains visible with 1.6 MP and 5 MP cameras.
+- Relax dark/orange-red color acceptance while requiring a substantially longer, thinner, elongated component to reject skin, clothes, and broad background regions.
+- Average the far-end cap pixels instead of selecting one extreme pixel to reduce endpoint jitter.
+- Sample large camera frames more sparsely to limit the CPU cost of the expanded color-search area.
+
 ## V1.6.0 Red Tube Wrist Edge Test
 
 - Add a separate `agent/red-tube-wrist-v1` experiment based on the restored V1.5.13 behavior.

@@ -94,7 +94,7 @@ namespace CSharp_YoloOnnx
         DateTime pinchCandidateStartedAt = DateTime.MinValue;
         DateTime pinchStartedAt = DateTime.MinValue;
         string drawingStatusText =
-            "紅管靠近任一手腕｜畫點停留 0.6 秒開始";
+            "握住紅管｜自由端停留 0.6 秒開始";
         string templateImagePath = string.Empty;
         double? lastDrawingScore;
         Button btnSelectTemplate;
@@ -297,7 +297,7 @@ namespace CSharp_YoloOnnx
         {
             InitializeComponent();
 
-            Text = "CSharp YOLO ONNX V1.6.0 Red Tube Wrist Edge Test";
+            Text = "CSharp YOLO ONNX V1.6.1 Red Tube Free Tip Test";
             panelToolBar.Dock = DockStyle.Top;
             panelToolBar.Height = 40;
             panelStatusBar.Dock = DockStyle.Bottom;
@@ -329,7 +329,7 @@ namespace CSharp_YoloOnnx
             string modelPath = "yolov8n-pose.onnx";
             InitializeYoloSession(modelPath);
             Text =
-                "CSharp YOLO ONNX V1.6.0 Red Tube Wrist Edge Test | " +
+                "CSharp YOLO ONNX V1.6.1 Red Tube Free Tip Test | " +
                 yoloExecutionProvider;
         }
 
@@ -1483,8 +1483,8 @@ namespace CSharp_YoloOnnx
                         : candidateVisible
                             ? "確認紅管畫點中｜請短暫保持穩定"
                             : gameState == GameState.Drawing
-                                ? "手腕附近找不到紅管｜軌跡已暫停"
-                                : "紅管靠近任一手腕｜停留 0.6 秒開始";
+                                ? "找不到完整紅管｜軌跡已暫停"
+                                : "握住紅管｜自由端停留 0.6 秒開始";
                 return;
             }
 
@@ -1508,7 +1508,7 @@ namespace CSharp_YoloOnnx
                     YellowStartHoldMs,
                     now);
                 drawingStatusText =
-                    "紅管畫點開始 " +
+                    "紅管自由端開始 " +
                     progress +
                     "%｜保持不動";
 
@@ -1551,7 +1551,7 @@ namespace CSharp_YoloOnnx
                 else
                 {
                     drawingStatusText =
-                        "開始成功｜移動紅管畫點開始畫圖";
+                        "開始成功｜移動紅管自由端開始畫圖";
                 }
 
                 return;
@@ -1584,7 +1584,7 @@ namespace CSharp_YoloOnnx
                     ? "停留完成 " +
                       finishProgress +
                       "%｜移動可取消"
-                    : "繪圖中（紅管畫點）｜畫完停留 0.9 秒完成";
+                    : "繪圖中（紅管自由端）｜畫完停留 0.9 秒完成";
         }
 
         private bool TryGetStableRedTubePoint(
@@ -3809,7 +3809,7 @@ namespace CSharp_YoloOnnx
                         6f * overlayScale,
                         6f * overlayScale);
                     graphics.DrawString(
-                        "紅管畫點",
+                        "紅管自由端",
                         markerFont,
                         Brushes.Red,
                         point.X + 15f * overlayScale,
