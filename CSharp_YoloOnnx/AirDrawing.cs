@@ -18,6 +18,7 @@ namespace CSharp_YoloOnnx
         public int CanvasHeight { get; set; }
         public List<PointF> SourcePoints { get; set; }
         public List<PointF> CanvasPoints { get; set; }
+        public List<int> StrokeStartIndices { get; set; }
     }
 
     public static class AirDrawStorage
@@ -26,6 +27,14 @@ namespace CSharp_YoloOnnx
         private const int CanvasPadding = 32;
 
         public static AirDrawSaveResult Save(IList<PointF> points, string outputDirectory)
+        {
+            return Save(points, null, outputDirectory);
+        }
+
+        public static AirDrawSaveResult Save(
+            IList<PointF> points,
+            IList<int> strokeStartIndices,
+            string outputDirectory)
         {
             if (points == null)
                 throw new ArgumentNullException(nameof(points));
@@ -50,7 +59,16 @@ namespace CSharp_YoloOnnx
                 DefaultCanvasSize,
                 CanvasPadding);
 
-            RenderDrawing(canvasPoints, imagePath, DefaultCanvasSize, DefaultCanvasSize);
+            List<int> normalizedStrokeStarts = NormalizeStrokeStarts(
+                strokeStartIndices,
+                sourcePoints.Count);
+
+            RenderDrawing(
+                canvasPoints,
+                normalizedStrokeStarts,
+                imagePath,
+                DefaultCanvasSize,
+                DefaultCanvasSize);
 
             AirDrawSaveResult result = new AirDrawSaveResult
             {
@@ -60,7 +78,8 @@ namespace CSharp_YoloOnnx
                 CanvasWidth = DefaultCanvasSize,
                 CanvasHeight = DefaultCanvasSize,
                 SourcePoints = sourcePoints,
-                CanvasPoints = canvasPoints
+                CanvasPoints = canvasPoints,
+                StrokeStartIndices = normalizedStrokeStarts
             };
 
             WriteMetadata(result, null, null);
@@ -81,7 +100,7 @@ namespace CSharp_YoloOnnx
                 new UTF8Encoding(false)))
             {
                 writer.WriteLine("{");
-                writer.WriteLine("  \"version\": 1,");
+                writer.WriteLine("  \"version\": 2,");
                 writer.WriteLine(
                     "  \"createdAt\": \"" +
                     result.CreatedAt.ToString("o", CultureInfo.InvariantCulture) +
@@ -90,6 +109,10 @@ namespace CSharp_YoloOnnx
                 writer.WriteLine("  \"canvasWidth\": " + result.CanvasWidth + ",");
                 writer.WriteLine("  \"canvasHeight\": " + result.CanvasHeight + ",");
                 writer.WriteLine("  \"sourcePointCount\": " + result.SourcePoints.Count + ",");
+                writer.WriteLine(
+                    "  \"strokeCount\": " +
+                    result.StrokeStartIndices.Count +
+                    ",");
 
                 WritePointArray(writer, "sourcePoints", result.SourcePoints, 1f, 1f, true);
                 WritePointArray(
@@ -98,6 +121,11 @@ namespace CSharp_YoloOnnx
                     result.CanvasPoints,
                     result.CanvasWidth,
                     result.CanvasHeight,
+                    true);
+                WriteIntegerArray(
+                    writer,
+                    "strokeStartIndices",
+                    result.StrokeStartIndices,
                     true);
 
                 if (!string.IsNullOrWhiteSpace(templateImagePath) && similarityScore.HasValue)
@@ -170,6 +198,7 @@ namespace CSharp_YoloOnnx
 
         private static void RenderDrawing(
             IList<PointF> points,
+            IList<int> strokeStartIndices,
             string imagePath,
             int width,
             int height)
@@ -187,30 +216,79 @@ namespace CSharp_YoloOnnx
                 pen.EndCap = LineCap.Round;
                 pen.LineJoin = LineJoin.Round;
 
-                if (points.Count == 1)
+                for (int strokeIndex = 0;
+                    strokeIndex < strokeStartIndices.Count;
+                    strokeIndex++)
                 {
-                    graphics.FillEllipse(
-                        Brushes.White,
-                        points[0].X - 4f,
-                        points[0].Y - 4f,
-                        8f,
-                        8f);
-                }
-                else
-                {
-                    graphics.DrawLines(pen, ToPointArray(points));
+                    int start = strokeStartIndices[strokeIndex];
+                    int end =
+                        strokeIndex + 1 < strokeStartIndices.Count
+                            ? strokeStartIndices[strokeIndex + 1]
+                            : points.Count;
+                    int count = end - start;
+
+                    if (count <= 0)
+                        continue;
+
+                    if (count == 1)
+                    {
+                        graphics.FillEllipse(
+                            Brushes.White,
+                            points[start].X - 4f,
+                            points[start].Y - 4f,
+                            8f,
+                            8f);
+                    }
+                    else
+                    {
+                        graphics.DrawLines(
+                            pen,
+                            ToPointArray(points, start, count));
+                    }
                 }
 
                 bitmap.Save(imagePath, ImageFormat.Png);
             }
         }
 
-        private static PointF[] ToPointArray(IList<PointF> points)
+        private static PointF[] ToPointArray(
+            IList<PointF> points,
+            int start,
+            int count)
         {
-            PointF[] result = new PointF[points.Count];
-            for (int i = 0; i < points.Count; i++)
-                result[i] = points[i];
+            PointF[] result = new PointF[count];
+            for (int i = 0; i < count; i++)
+                result[i] = points[start + i];
 
+            return result;
+        }
+
+        private static List<int> NormalizeStrokeStarts(
+            IList<int> strokeStartIndices,
+            int pointCount)
+        {
+            List<int> result = new List<int>();
+
+            if (pointCount <= 0)
+                return result;
+
+            result.Add(0);
+
+            if (strokeStartIndices == null)
+                return result;
+
+            for (int i = 0; i < strokeStartIndices.Count; i++)
+            {
+                int value = strokeStartIndices[i];
+
+                if (value <= 0 || value >= pointCount)
+                    continue;
+
+                if (!result.Contains(value))
+                    result.Add(value);
+            }
+
+            result.Sort();
             return result;
         }
 
@@ -242,6 +320,25 @@ namespace CSharp_YoloOnnx
             writer.WriteLine("  ]" + (appendComma ? "," : string.Empty));
         }
 
+        private static void WriteIntegerArray(
+            StreamWriter writer,
+            string name,
+            IList<int> values,
+            bool appendComma)
+        {
+            writer.Write("  \"" + name + "\": [");
+
+            for (int i = 0; i < values.Count; i++)
+            {
+                if (i > 0)
+                    writer.Write(", ");
+
+                writer.Write(values[i].ToString(CultureInfo.InvariantCulture));
+            }
+
+            writer.WriteLine("]" + (appendComma ? "," : string.Empty));
+        }
+
         private static string EscapeJson(string value)
         {
             if (value == null)
@@ -259,8 +356,19 @@ namespace CSharp_YoloOnnx
     {
         private const int ComparisonCanvasSize = 256;
         private const int ComparisonPadding = 18;
-        private const int MatchTolerance = 6;
         private const int BackgroundDifferenceThreshold = 35;
+        private const int MinimumComponentPixels = 6;
+        private const double FineDistanceSigma = 5d;
+        private const double BroadDistanceSigma = 13d;
+        private const double StrictCoverageDistance = 5d;
+        private const double CalibrationMidpoint = 0.48d;
+        private const double CalibrationSteepness = 14d;
+        private const double DiagonalDistance = 1.4142135623730951d;
+        private const double InfiniteDistance = 1000000d;
+        private static readonly float[] RotationCandidates =
+        {
+            -8f, -6f, -4f, -2f, 0f, 2f, 4f, 6f, 8f
+        };
 
         public static double Compare(string drawingImagePath, string templateImagePath)
         {
@@ -279,17 +387,148 @@ namespace CSharp_YoloOnnx
             if (drawingCount == 0 || templateCount == 0)
                 return 0d;
 
-            int matchedDrawing = CountMatchedPixels(drawingMask, templateMask, MatchTolerance);
-            int matchedTemplate = CountMatchedPixels(templateMask, drawingMask, MatchTolerance);
+            double[,] templateDistanceMap = BuildDistanceMap(templateMask);
+            double bestRawScore = 0d;
 
-            double precision = matchedDrawing / (double)drawingCount;
-            double recall = matchedTemplate / (double)templateCount;
+            for (int i = 0; i < RotationCandidates.Length; i++)
+            {
+                bool[,] rotatedDrawing = RotateMask(
+                    drawingMask,
+                    RotationCandidates[i]);
+                double rawScore = CalculateRawMaskScore(
+                    rotatedDrawing,
+                    templateMask,
+                    templateDistanceMap);
 
-            if (precision + recall <= 0d)
+                if (rawScore > bestRawScore)
+                    bestRawScore = rawScore;
+            }
+
+            return CalibrateScore(bestRawScore);
+        }
+
+        private static double CalculateRawMaskScore(
+            bool[,] drawingMask,
+            bool[,] templateMask,
+            double[,] templateDistanceMap)
+        {
+            int drawingCount = CountPixels(drawingMask);
+            int templateCount = CountPixels(templateMask);
+
+            if (drawingCount == 0 || templateCount == 0)
                 return 0d;
 
-            double score = 2d * precision * recall / (precision + recall) * 100d;
-            return Math.Max(0d, Math.Min(100d, score));
+            double[,] drawingDistanceMap = BuildDistanceMap(drawingMask);
+            DistanceStatistics drawingToTemplate = MeasureDistance(
+                drawingMask,
+                templateDistanceMap);
+            DistanceStatistics templateToDrawing = MeasureDistance(
+                templateMask,
+                drawingDistanceMap);
+
+            double continuousDistanceScore = HarmonicMean(
+                drawingToTemplate.SoftCloseness,
+                templateToDrawing.SoftCloseness);
+            double strictCoverageScore = Math.Min(
+                drawingToTemplate.StrictCoverage,
+                templateToDrawing.StrictCoverage);
+
+            double worstOutlierDistance = Math.Max(
+                drawingToTemplate.Percentile90Distance,
+                templateToDrawing.Percentile90Distance);
+            double outlierScore = Math.Exp(
+                -(worstOutlierDistance * worstOutlierDistance) /
+                (2d * BroadDistanceSigma * BroadDistanceSigma));
+
+            double lengthRatio = drawingCount / (double)templateCount;
+            double lengthBalanceScore = Math.Exp(
+                -1.25d * Math.Abs(Math.Log(lengthRatio)));
+
+            double rawScore =
+                continuousDistanceScore * 0.50d +
+                strictCoverageScore * 0.22d +
+                outlierScore * 0.18d +
+                lengthBalanceScore * 0.10d;
+
+            return Clamp01(rawScore);
+        }
+
+        private static double CalibrateScore(double rawScore)
+        {
+            double minimum = LogisticCalibration(0d);
+            double maximum = LogisticCalibration(1d);
+            double calibrated =
+                (LogisticCalibration(Clamp01(rawScore)) - minimum) /
+                (maximum - minimum);
+
+            return Clamp01(calibrated) * 100d;
+        }
+
+        private static double LogisticCalibration(double rawScore)
+        {
+            return 1d /
+                (1d + Math.Exp(
+                    -CalibrationSteepness *
+                    (rawScore - CalibrationMidpoint)));
+        }
+
+        private static double HarmonicMean(double first, double second)
+        {
+            if (first <= 0d || second <= 0d)
+                return 0d;
+
+            return 2d * first * second / (first + second);
+        }
+
+        private static double Clamp01(double value)
+        {
+            return Math.Max(0d, Math.Min(1d, value));
+        }
+
+        private static bool[,] RotateMask(
+            bool[,] source,
+            float angleDegrees)
+        {
+            if (Math.Abs(angleDegrees) < 0.001f)
+                return source;
+
+            int height = source.GetLength(0);
+            int width = source.GetLength(1);
+            bool[,] result = new bool[height, width];
+            double radians = angleDegrees * Math.PI / 180d;
+            double cosine = Math.Cos(radians);
+            double sine = Math.Sin(radians);
+            double centerX = (width - 1) / 2d;
+            double centerY = (height - 1) / 2d;
+
+            for (int destinationY = 0;
+                destinationY < height;
+                destinationY++)
+            {
+                double dy = destinationY - centerY;
+
+                for (int destinationX = 0;
+                    destinationX < width;
+                    destinationX++)
+                {
+                    double dx = destinationX - centerX;
+                    int sourceX = (int)Math.Round(
+                        cosine * dx + sine * dy + centerX);
+                    int sourceY = (int)Math.Round(
+                        -sine * dx + cosine * dy + centerY);
+
+                    if (sourceX >= 0 &&
+                        sourceX < width &&
+                        sourceY >= 0 &&
+                        sourceY < height &&
+                        source[sourceY, sourceX])
+                    {
+                        result[destinationY, destinationX] = true;
+                    }
+                }
+            }
+
+            return result;
         }
 
         private static bool[,] LoadNormalizedMask(string imagePath)
@@ -299,11 +538,6 @@ namespace CSharp_YoloOnnx
             {
                 Color background = AverageCornerColor(resized);
                 bool[,] rawMask = new bool[ComparisonCanvasSize, ComparisonCanvasSize];
-
-                int minX = ComparisonCanvasSize;
-                int minY = ComparisonCanvasSize;
-                int maxX = -1;
-                int maxY = -1;
 
                 for (int y = 0; y < ComparisonCanvasSize; y++)
                 {
@@ -317,21 +551,36 @@ namespace CSharp_YoloOnnx
 
                         bool isStroke = difference >= BackgroundDifferenceThreshold;
                         rawMask[y, x] = isStroke;
-
-                        if (isStroke)
-                        {
-                            minX = Math.Min(minX, x);
-                            minY = Math.Min(minY, y);
-                            maxX = Math.Max(maxX, x);
-                            maxY = Math.Max(maxY, y);
-                        }
                     }
                 }
 
-                if (maxX < minX || maxY < minY)
-                    return new bool[ComparisonCanvasSize, ComparisonCanvasSize];
+                rawMask = RemoveSmallComponents(
+                    rawMask,
+                    MinimumComponentPixels);
 
-                return NormalizeMask(rawMask, minX, minY, maxX, maxY);
+                int minX;
+                int minY;
+                int maxX;
+                int maxY;
+
+                if (!TryGetBounds(
+                    rawMask,
+                    out minX,
+                    out minY,
+                    out maxX,
+                    out maxY))
+                {
+                    return new bool[ComparisonCanvasSize, ComparisonCanvasSize];
+                }
+
+                bool[,] normalized = NormalizeMask(
+                    rawMask,
+                    minX,
+                    minY,
+                    maxX,
+                    maxY);
+
+                return ThinMask(normalized);
             }
         }
 
@@ -435,9 +684,289 @@ namespace CSharp_YoloOnnx
             return count;
         }
 
-        private static int CountMatchedPixels(bool[,] source, bool[,] target, int tolerance)
+        private static bool TryGetBounds(
+            bool[,] mask,
+            out int minX,
+            out int minY,
+            out int maxX,
+            out int maxY)
         {
-            int matched = 0;
+            int height = mask.GetLength(0);
+            int width = mask.GetLength(1);
+            minX = width;
+            minY = height;
+            maxX = -1;
+            maxY = -1;
+
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    if (!mask[y, x])
+                        continue;
+
+                    minX = Math.Min(minX, x);
+                    minY = Math.Min(minY, y);
+                    maxX = Math.Max(maxX, x);
+                    maxY = Math.Max(maxY, y);
+                }
+            }
+
+            return maxX >= minX && maxY >= minY;
+        }
+
+        private static bool[,] RemoveSmallComponents(
+            bool[,] source,
+            int minimumPixels)
+        {
+            int height = source.GetLength(0);
+            int width = source.GetLength(1);
+            bool[,] result = (bool[,])source.Clone();
+            bool[,] visited = new bool[height, width];
+            Queue<Point> pending = new Queue<Point>();
+            List<Point> component = new List<Point>();
+
+            for (int startY = 0; startY < height; startY++)
+            {
+                for (int startX = 0; startX < width; startX++)
+                {
+                    if (!source[startY, startX] ||
+                        visited[startY, startX])
+                    {
+                        continue;
+                    }
+
+                    pending.Clear();
+                    component.Clear();
+                    pending.Enqueue(new Point(startX, startY));
+                    visited[startY, startX] = true;
+
+                    while (pending.Count > 0)
+                    {
+                        Point current = pending.Dequeue();
+                        component.Add(current);
+
+                        for (int offsetY = -1; offsetY <= 1; offsetY++)
+                        {
+                            for (int offsetX = -1; offsetX <= 1; offsetX++)
+                            {
+                                if (offsetX == 0 && offsetY == 0)
+                                    continue;
+
+                                int nextX = current.X + offsetX;
+                                int nextY = current.Y + offsetY;
+
+                                if (nextX < 0 || nextX >= width ||
+                                    nextY < 0 || nextY >= height ||
+                                    visited[nextY, nextX] ||
+                                    !source[nextY, nextX])
+                                {
+                                    continue;
+                                }
+
+                                visited[nextY, nextX] = true;
+                                pending.Enqueue(new Point(nextX, nextY));
+                            }
+                        }
+                    }
+
+                    if (component.Count >= minimumPixels)
+                        continue;
+
+                    for (int i = 0; i < component.Count; i++)
+                    {
+                        Point point = component[i];
+                        result[point.Y, point.X] = false;
+                    }
+                }
+            }
+
+            return result;
+        }
+
+        private static bool[,] ThinMask(bool[,] source)
+        {
+            bool[,] result = (bool[,])source.Clone();
+            List<Point> removalPoints = new List<Point>();
+            bool changed;
+
+            do
+            {
+                bool changedFirst = ApplyThinningPass(
+                    result,
+                    removalPoints,
+                    true);
+                bool changedSecond = ApplyThinningPass(
+                    result,
+                    removalPoints,
+                    false);
+                changed = changedFirst || changedSecond;
+            }
+            while (changed);
+
+            return result;
+        }
+
+        private static bool ApplyThinningPass(
+            bool[,] mask,
+            List<Point> removalPoints,
+            bool firstPass)
+        {
+            removalPoints.Clear();
+            int height = mask.GetLength(0);
+            int width = mask.GetLength(1);
+
+            for (int y = 1; y < height - 1; y++)
+            {
+                for (int x = 1; x < width - 1; x++)
+                {
+                    if (!mask[y, x])
+                        continue;
+
+                    bool p2 = mask[y - 1, x];
+                    bool p3 = mask[y - 1, x + 1];
+                    bool p4 = mask[y, x + 1];
+                    bool p5 = mask[y + 1, x + 1];
+                    bool p6 = mask[y + 1, x];
+                    bool p7 = mask[y + 1, x - 1];
+                    bool p8 = mask[y, x - 1];
+                    bool p9 = mask[y - 1, x - 1];
+
+                    int neighbourCount =
+                        (p2 ? 1 : 0) +
+                        (p3 ? 1 : 0) +
+                        (p4 ? 1 : 0) +
+                        (p5 ? 1 : 0) +
+                        (p6 ? 1 : 0) +
+                        (p7 ? 1 : 0) +
+                        (p8 ? 1 : 0) +
+                        (p9 ? 1 : 0);
+
+                    if (neighbourCount < 2 || neighbourCount > 6)
+                        continue;
+
+                    int transitionCount =
+                        (!p2 && p3 ? 1 : 0) +
+                        (!p3 && p4 ? 1 : 0) +
+                        (!p4 && p5 ? 1 : 0) +
+                        (!p5 && p6 ? 1 : 0) +
+                        (!p6 && p7 ? 1 : 0) +
+                        (!p7 && p8 ? 1 : 0) +
+                        (!p8 && p9 ? 1 : 0) +
+                        (!p9 && p2 ? 1 : 0);
+
+                    if (transitionCount != 1)
+                        continue;
+
+                    bool firstTriplet;
+                    bool secondTriplet;
+
+                    if (firstPass)
+                    {
+                        firstTriplet = p2 && p4 && p6;
+                        secondTriplet = p4 && p6 && p8;
+                    }
+                    else
+                    {
+                        firstTriplet = p2 && p4 && p8;
+                        secondTriplet = p2 && p6 && p8;
+                    }
+
+                    if (!firstTriplet && !secondTriplet)
+                        removalPoints.Add(new Point(x, y));
+                }
+            }
+
+            for (int i = 0; i < removalPoints.Count; i++)
+            {
+                Point point = removalPoints[i];
+                mask[point.Y, point.X] = false;
+            }
+
+            return removalPoints.Count > 0;
+        }
+
+        private static double[,] BuildDistanceMap(bool[,] mask)
+        {
+            int height = mask.GetLength(0);
+            int width = mask.GetLength(1);
+            double[,] distances = new double[height, width];
+
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    distances[y, x] =
+                        mask[y, x]
+                            ? 0d
+                            : InfiniteDistance;
+                }
+            }
+
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    double best = distances[y, x];
+
+                    if (x > 0)
+                        best = Math.Min(best, distances[y, x - 1] + 1d);
+                    if (y > 0)
+                        best = Math.Min(best, distances[y - 1, x] + 1d);
+                    if (x > 0 && y > 0)
+                    {
+                        best = Math.Min(
+                            best,
+                            distances[y - 1, x - 1] + DiagonalDistance);
+                    }
+                    if (x + 1 < width && y > 0)
+                    {
+                        best = Math.Min(
+                            best,
+                            distances[y - 1, x + 1] + DiagonalDistance);
+                    }
+
+                    distances[y, x] = best;
+                }
+            }
+
+            for (int y = height - 1; y >= 0; y--)
+            {
+                for (int x = width - 1; x >= 0; x--)
+                {
+                    double best = distances[y, x];
+
+                    if (x + 1 < width)
+                        best = Math.Min(best, distances[y, x + 1] + 1d);
+                    if (y + 1 < height)
+                        best = Math.Min(best, distances[y + 1, x] + 1d);
+                    if (x + 1 < width && y + 1 < height)
+                    {
+                        best = Math.Min(
+                            best,
+                            distances[y + 1, x + 1] + DiagonalDistance);
+                    }
+                    if (x > 0 && y + 1 < height)
+                    {
+                        best = Math.Min(
+                            best,
+                            distances[y + 1, x - 1] + DiagonalDistance);
+                    }
+
+                    distances[y, x] = best;
+                }
+            }
+
+            return distances;
+        }
+
+        private static DistanceStatistics MeasureDistance(
+            bool[,] source,
+            double[,] targetDistanceMap)
+        {
+            List<double> distances = new List<double>();
+            double softClosenessSum = 0d;
+            int strictMatches = 0;
             int height = source.GetLength(0);
             int width = source.GetLength(1);
 
@@ -445,37 +974,54 @@ namespace CSharp_YoloOnnx
             {
                 for (int x = 0; x < width; x++)
                 {
-                    if (source[y, x] && HasNearbyPixel(target, x, y, tolerance))
-                        matched++;
+                    if (!source[y, x])
+                        continue;
+
+                    double distance = targetDistanceMap[y, x];
+                    distances.Add(distance);
+
+                    double fineCloseness = Math.Exp(
+                        -(distance * distance) /
+                        (2d * FineDistanceSigma * FineDistanceSigma));
+                    double broadCloseness = Math.Exp(
+                        -(distance * distance) /
+                        (2d * BroadDistanceSigma * BroadDistanceSigma));
+
+                    softClosenessSum +=
+                        fineCloseness * 0.75d +
+                        broadCloseness * 0.25d;
+
+                    if (distance <= StrictCoverageDistance)
+                        strictMatches++;
                 }
             }
 
-            return matched;
+            if (distances.Count == 0)
+                return new DistanceStatistics();
+
+            distances.Sort();
+            int percentileIndex = (int)Math.Ceiling(
+                distances.Count * 0.90d) - 1;
+            percentileIndex = Math.Max(
+                0,
+                Math.Min(distances.Count - 1, percentileIndex));
+
+            return new DistanceStatistics
+            {
+                SoftCloseness =
+                    softClosenessSum / distances.Count,
+                StrictCoverage =
+                    strictMatches / (double)distances.Count,
+                Percentile90Distance =
+                    distances[percentileIndex]
+            };
         }
 
-        private static bool HasNearbyPixel(bool[,] mask, int centerX, int centerY, int tolerance)
+        private sealed class DistanceStatistics
         {
-            int height = mask.GetLength(0);
-            int width = mask.GetLength(1);
-            int minX = Math.Max(0, centerX - tolerance);
-            int maxX = Math.Min(width - 1, centerX + tolerance);
-            int minY = Math.Max(0, centerY - tolerance);
-            int maxY = Math.Min(height - 1, centerY + tolerance);
-            int toleranceSquared = tolerance * tolerance;
-
-            for (int y = minY; y <= maxY; y++)
-            {
-                for (int x = minX; x <= maxX; x++)
-                {
-                    int dx = x - centerX;
-                    int dy = y - centerY;
-
-                    if (dx * dx + dy * dy <= toleranceSquared && mask[y, x])
-                        return true;
-                }
-            }
-
-            return false;
+            public double SoftCloseness { get; set; }
+            public double StrictCoverage { get; set; }
+            public double Percentile90Distance { get; set; }
         }
     }
 }
