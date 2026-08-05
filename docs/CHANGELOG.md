@@ -1,5 +1,16 @@
 # 版本紀錄
 
+## V1.6.0 Red Tube Wrist Edge Test
+
+- Add a separate `agent/red-tube-wrist-v1` experiment based on the restored V1.5.13 behavior.
+- Replace yellow-tip tracking with an all-red flexible-tube detector.
+- Search only around reliable YOLO pose wrists and select the red component edge point nearest either wrist as the drawing point.
+- Reject broad red/skin/clothing regions with connected-component span, fill-ratio, and elongation checks.
+- Preserve short stationary confirmation, jitter tolerance, interpolated trajectory continuity, and hold-to-start/finish behavior.
+- Keep YOLO pose inference active for wrist coordinates while hiding all person boxes, skeleton lines, facial lines, and pose keypoint overlays.
+- Report red-tube tracking time and `FOUND`, `LOST`, or `NO WRIST` in the bottom-right diagnostics label.
+- Preserve CUDA/CPU fallback, camera/display/pose diagnostics, generic shape scoring, saved drawings, and magic animation behavior.
+
 ## V1.5.13 Live GPU Diagnostics Test
 
 - Restore the independent WinForms diagnostics label at the bottom-right of the window.

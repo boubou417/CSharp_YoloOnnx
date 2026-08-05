@@ -60,6 +60,8 @@ namespace CSharp_YoloOnnx
         const float OpenPalmStartScore = 0.75f;
         const float OpenPalmReleaseScore = 0.50f;
         const float MinimumPoseHandKeypointScore = 0.35f;
+        const float MinimumRedTubeWristScore = 0.25f;
+        const int RedTubeWristGraceMs = 250;
         const float MinimumIdleHandPresence = 0.35f;
         const float MinimumDrawingHandPresence = 0.45f;
         const int YellowStartHoldMs = 600;
@@ -92,7 +94,7 @@ namespace CSharp_YoloOnnx
         DateTime pinchCandidateStartedAt = DateTime.MinValue;
         DateTime pinchStartedAt = DateTime.MinValue;
         string drawingStatusText =
-            "左右手皆可｜張開手掌 0.6 秒開始";
+            "紅管靠近任一手腕｜畫點停留 0.6 秒開始";
         string templateImagePath = string.Empty;
         double? lastDrawingScore;
         Button btnSelectTemplate;
@@ -102,7 +104,17 @@ namespace CSharp_YoloOnnx
         FingertipTracker fingertipTracker;
         readonly YellowTipTracker yellowTipTracker =
             new YellowTipTracker();
-        readonly bool yellowTipMode = true;
+        readonly RedTubeTracker redTubeTracker =
+            new RedTubeTracker();
+        readonly bool redTubeWristMode = true;
+        readonly bool yellowTipMode = false;
+        readonly bool showPoseOverlay = false;
+        PointF? lastReliableLeftRedTubeWrist;
+        PointF? lastReliableRightRedTubeWrist;
+        DateTime lastLeftRedTubeWristSeenAt =
+            DateTime.MinValue;
+        DateTime lastRightRedTubeWristSeenAt =
+            DateTime.MinValue;
         DateTime yellowHoldStartedAt = DateTime.MinValue;
         DateTime yellowMissingSince = DateTime.MinValue;
         PointF? yellowHoldAnchor;
@@ -285,7 +297,7 @@ namespace CSharp_YoloOnnx
         {
             InitializeComponent();
 
-            Text = "CSharp YOLO ONNX V1.5.13 Live GPU Diagnostics";
+            Text = "CSharp YOLO ONNX V1.6.0 Red Tube Wrist Edge Test";
             panelToolBar.Dock = DockStyle.Top;
             panelToolBar.Height = 40;
             panelStatusBar.Dock = DockStyle.Bottom;
@@ -295,7 +307,8 @@ namespace CSharp_YoloOnnx
             pBox.SizeMode = PictureBoxSizeMode.Zoom;
             InitializeAirDrawControls();
             TryLoadDefaultTemplate();
-            if (!yellowTipMode)
+            if (!yellowTipMode &&
+                !redTubeWristMode)
                 InitializeFingertipTracker();
             InitializeMagicAnimation();
             FormClosed += Form1_FormClosed;
@@ -316,7 +329,7 @@ namespace CSharp_YoloOnnx
             string modelPath = "yolov8n-pose.onnx";
             InitializeYoloSession(modelPath);
             Text =
-                "CSharp YOLO ONNX V1.5.13 Live GPU Diagnostics | " +
+                "CSharp YOLO ONNX V1.6.0 Red Tube Wrist Edge Test | " +
                 yoloExecutionProvider;
         }
 
@@ -620,7 +633,7 @@ namespace CSharp_YoloOnnx
                 BackColor = Color.WhiteSmoke,
                 Text =
                     "YOLO -- | CAM -- | DISP -- | " +
-                    "POSE -- | HAND -- | WAIT"
+                    "POSE -- | TUBE -- | WAIT"
             };
 
             panelStatusBar.Controls.Add(lblAirDrawStatus);
@@ -645,7 +658,7 @@ namespace CSharp_YoloOnnx
             drawingStatusText =
                 "比對圖：" +
                 Path.GetFileName(templateImagePath) +
-                "｜黃色筆尖停留開始";
+                "｜紅管畫點停留開始";
         }
 
         private void btnSelectTemplate_Click(object sender, EventArgs e)
@@ -664,7 +677,7 @@ namespace CSharp_YoloOnnx
                 drawingStatusText =
                     "比對圖：" +
                     Path.GetFileName(templateImagePath) +
-                    "｜左右手張掌開始";
+                    "｜紅管畫點停留開始";
             }
         }
 
@@ -1216,6 +1229,12 @@ namespace CSharp_YoloOnnx
 
         private void UpdateGame(Detection main, Bitmap frame)
         {
+            if (redTubeWristMode)
+            {
+                UpdateRedTubeGame(main, frame);
+                return;
+            }
+
             if (yellowTipMode)
             {
                 UpdateYellowTipGame(frame);
@@ -1376,6 +1395,384 @@ namespace CSharp_YoloOnnx
                 case GameState.Scoring:
                     break;
             }
+        }
+
+        private void UpdateRedTubeGame(
+            Detection main,
+            Bitmap frame)
+        {
+            DateTime now = DateTime.Now;
+            float trackingScale =
+                GetResolutionScale(frame.Size);
+
+            if (gameState == GameState.Finished)
+            {
+                if (drawingFinishedAt != DateTime.MinValue &&
+                    (now - drawingFinishedAt)
+                        .TotalMilliseconds >=
+                    FinishedDisplayMs)
+                {
+                    gameState = GameState.Idle;
+                    handTrail.Clear();
+                    drawingPoints.Clear();
+                    drawingPointTimes.Clear();
+                    drawingStrokeStartIndices.Clear();
+                    drawingStrokeStartPending = true;
+                    lastFingertipPoint = null;
+                    displayedFingertipPoint = null;
+                    displayedThumbPoint = null;
+                    displayedFingertipPresence = 0f;
+                    yellowDrawingStartPoint = null;
+                    yellowMovedAfterStart = false;
+                    yellowMissingSince =
+                        DateTime.MinValue;
+                    ResetYellowTracking();
+                    drawingStatusText =
+                        GetIdleInstruction();
+                }
+
+                return;
+            }
+
+            if (gameState == GameState.Scoring)
+                return;
+
+            PointF drawingPoint;
+            RectangleF bounds;
+            bool candidateVisible;
+            bool detected =
+                TryGetStableRedTubePoint(
+                    frame,
+                    main,
+                    now,
+                    trackingScale,
+                    out drawingPoint,
+                    out bounds,
+                    out candidateVisible);
+
+            if (!detected)
+            {
+                ResetYellowHold();
+
+                if (yellowMissingSince ==
+                    DateTime.MinValue)
+                {
+                    yellowMissingSince = now;
+                }
+
+                if ((now - yellowMissingSince)
+                        .TotalMilliseconds >=
+                    YellowMissingBreakMs)
+                {
+                    displayedFingertipPoint = null;
+                    displayedYellowTipBounds =
+                        RectangleF.Empty;
+
+                    if (gameState ==
+                        GameState.Drawing)
+                    {
+                        drawingStrokeStartPending =
+                            true;
+                        lastFingertipPoint = null;
+                    }
+                }
+
+                drawingStatusText =
+                    main == null
+                        ? "正在尋找人物手腕｜請讓手腕保持在畫面內"
+                        : candidateVisible
+                            ? "確認紅管畫點中｜請短暫保持穩定"
+                            : gameState == GameState.Drawing
+                                ? "手腕附近找不到紅管｜軌跡已暫停"
+                                : "紅管靠近任一手腕｜停留 0.6 秒開始";
+                return;
+            }
+
+            yellowMissingSince = DateTime.MinValue;
+            displayedFingertipPoint = drawingPoint;
+            displayedThumbPoint = null;
+            displayedFingertipPresence = 1f;
+            displayedDrawingHand = DrawingHand.None;
+            displayedYellowTipBounds = bounds;
+            lastFingertipSeenAt = now;
+
+            if (gameState == GameState.Idle)
+            {
+                UpdateYellowHold(
+                    drawingPoint,
+                    now,
+                    trackingScale);
+
+                int progress = GetProgressPercent(
+                    yellowHoldStartedAt,
+                    YellowStartHoldMs,
+                    now);
+                drawingStatusText =
+                    "紅管畫點開始 " +
+                    progress +
+                    "%｜保持不動";
+
+                if (progress >= 100)
+                {
+                    StartRedTubeDrawing(
+                        drawingPoint);
+                }
+
+                return;
+            }
+
+            if (gameState != GameState.Drawing)
+                return;
+
+            if (!yellowMovedAfterStart)
+            {
+                PointF origin =
+                    yellowDrawingStartPoint ??
+                    drawingPoint;
+                float dx =
+                    drawingPoint.X - origin.X;
+                float dy =
+                    drawingPoint.Y - origin.Y;
+                float startMoveDistance =
+                    YellowStartMoveDistance *
+                    trackingScale;
+
+                if (dx * dx + dy * dy >=
+                    startMoveDistance *
+                    startMoveDistance)
+                {
+                    yellowMovedAfterStart = true;
+                    drawingStrokeStartPending = true;
+                    ResetYellowHold();
+                    AddTubeDrawingPoint(
+                        drawingPoint,
+                        trackingScale);
+                }
+                else
+                {
+                    drawingStatusText =
+                        "開始成功｜移動紅管畫點開始畫圖";
+                }
+
+                return;
+            }
+
+            AddTubeDrawingPoint(
+                drawingPoint,
+                trackingScale);
+            UpdateYellowHold(
+                drawingPoint,
+                now,
+                trackingScale);
+            int finishProgress =
+                GetProgressPercent(
+                    yellowHoldStartedAt,
+                    YellowFinishHoldMs,
+                    now);
+
+            if (finishProgress >= 100)
+            {
+                DateTime holdStartedAt =
+                    yellowHoldStartedAt;
+                StopDrawing(holdStartedAt, 0);
+                ResetYellowHold();
+                return;
+            }
+
+            drawingStatusText =
+                finishProgress > 0
+                    ? "停留完成 " +
+                      finishProgress +
+                      "%｜移動可取消"
+                    : "繪圖中（紅管畫點）｜畫完停留 0.9 秒完成";
+        }
+
+        private bool TryGetStableRedTubePoint(
+            Bitmap frame,
+            Detection main,
+            DateTime now,
+            float trackingScale,
+            out PointF drawingPoint,
+            out RectangleF bounds,
+            out bool candidateVisible)
+        {
+            drawingPoint = PointF.Empty;
+            bounds = RectangleF.Empty;
+            candidateVisible = false;
+            PointF? leftWrist;
+            PointF? rightWrist;
+
+            GetReliablePoseWrists(
+                main,
+                frame.Size,
+                out leftWrist,
+                out rightWrist);
+
+            PointF rawPoint;
+            RectangleF rawBounds;
+
+            Stopwatch tubeStopwatch =
+                Stopwatch.StartNew();
+            bool tubeDetected =
+                redTubeTracker.TryDetect(
+                    frame,
+                    leftWrist,
+                    rightWrist,
+                    out rawPoint,
+                    out rawBounds);
+            tubeStopwatch.Stop();
+            latestHandInferenceMilliseconds =
+                tubeStopwatch.Elapsed
+                    .TotalMilliseconds;
+            latestHandInferenceResult =
+                tubeDetected
+                    ? "FOUND"
+                    : leftWrist.HasValue ||
+                      rightWrist.HasValue
+                        ? "LOST"
+                        : "NO WRIST";
+
+            if (!tubeDetected)
+            {
+                if (yellowRawMissingSince ==
+                    DateTime.MinValue)
+                {
+                    yellowRawMissingSince = now;
+                }
+
+                if ((now - yellowRawMissingSince)
+                        .TotalMilliseconds >=
+                    YellowTrackingLossGraceMs)
+                {
+                    yellowTrackingConfirmed = false;
+                    yellowCandidateStartedAt =
+                        DateTime.MinValue;
+                    yellowCandidateAnchor = null;
+                    filteredYellowTip = null;
+                    lastYellowAcceptedAt =
+                        DateTime.MinValue;
+                }
+
+                return false;
+            }
+
+            candidateVisible = true;
+            yellowRawMissingSince = DateTime.MinValue;
+
+            if (!yellowTrackingConfirmed)
+            {
+                if (!yellowCandidateAnchor.HasValue)
+                {
+                    yellowCandidateAnchor = rawPoint;
+                    yellowCandidateStartedAt = now;
+                    return false;
+                }
+
+                float candidateDx =
+                    rawPoint.X -
+                    yellowCandidateAnchor.Value.X;
+                float candidateDy =
+                    rawPoint.Y -
+                    yellowCandidateAnchor.Value.Y;
+                float reacquireRadius =
+                    YellowReacquireRadius *
+                    trackingScale;
+
+                if (candidateDx * candidateDx +
+                    candidateDy * candidateDy >
+                    reacquireRadius *
+                    reacquireRadius)
+                {
+                    yellowCandidateAnchor = rawPoint;
+                    yellowCandidateStartedAt = now;
+                    return false;
+                }
+
+                if ((now - yellowCandidateStartedAt)
+                        .TotalMilliseconds <
+                    YellowReacquireConfirmMs)
+                {
+                    return false;
+                }
+
+                yellowTrackingConfirmed = true;
+                filteredYellowTip = rawPoint;
+                lastYellowAcceptedAt = now;
+                yellowCandidateStartedAt =
+                    DateTime.MinValue;
+                yellowCandidateAnchor = null;
+            }
+            else if (filteredYellowTip.HasValue)
+            {
+                PointF previous =
+                    filteredYellowTip.Value;
+                float dx = rawPoint.X - previous.X;
+                float dy = rawPoint.Y - previous.Y;
+                float distanceSquared =
+                    dx * dx + dy * dy;
+                double elapsedMilliseconds =
+                    lastYellowAcceptedAt ==
+                        DateTime.MinValue
+                        ? 33d
+                        : Math.Max(
+                            1d,
+                            (now - lastYellowAcceptedAt)
+                                .TotalMilliseconds);
+                float maximumJump =
+                    Math.Min(
+                        YellowMaximumAdaptiveJump *
+                            trackingScale,
+                        YellowBaseFrameJump *
+                            trackingScale +
+                        YellowMaximumSpeedPixelsPerSecond *
+                            trackingScale *
+                        (float)elapsedMilliseconds /
+                            1000f);
+
+                if (distanceSquared >
+                    maximumJump * maximumJump)
+                {
+                    return false;
+                }
+
+                float jitterDeadZone =
+                    YellowJitterDeadZone *
+                    trackingScale;
+
+                if (distanceSquared <=
+                    jitterDeadZone *
+                    jitterDeadZone)
+                {
+                    rawPoint = previous;
+                }
+                else
+                {
+                    float fastMotionDistance =
+                        YellowFastMotionDistance *
+                        trackingScale;
+                    float smoothing =
+                        distanceSquared >=
+                            fastMotionDistance *
+                            fastMotionDistance
+                            ? YellowFastPositionSmoothing
+                            : YellowSlowPositionSmoothing;
+                    rawPoint = new PointF(
+                        previous.X + dx * smoothing,
+                        previous.Y + dy * smoothing);
+                }
+
+                filteredYellowTip = rawPoint;
+                lastYellowAcceptedAt = now;
+            }
+            else
+            {
+                filteredYellowTip = rawPoint;
+                lastYellowAcceptedAt = now;
+            }
+
+            drawingPoint = filteredYellowTip.Value;
+            bounds = rawBounds;
+            return true;
         }
 
         private void UpdateYellowTipGame(Bitmap frame)
@@ -1747,6 +2144,15 @@ namespace CSharp_YoloOnnx
             }
         }
 
+        private void AddTubeDrawingPoint(
+            PointF point,
+            float trackingScale)
+        {
+            AddYellowDrawingPoint(
+                point,
+                trackingScale);
+        }
+
         private void StartYellowTipDrawing(PointF tip)
         {
             StartDrawing(DrawingHand.None, null);
@@ -1759,6 +2165,21 @@ namespace CSharp_YoloOnnx
             ResetYellowHold();
             drawingStatusText =
                 "開始成功｜移動黃色筆尖開始畫圖";
+        }
+
+        private void StartRedTubeDrawing(
+            PointF drawingPoint)
+        {
+            StartDrawing(DrawingHand.None, null);
+            waitingForOpenPalmReleaseAfterStart = false;
+            yellowDrawingStartPoint = drawingPoint;
+            yellowMovedAfterStart = false;
+            yellowMissingSince = DateTime.MinValue;
+            displayedFingertipPoint = drawingPoint;
+            displayedFingertipPresence = 1f;
+            ResetYellowHold();
+            drawingStatusText =
+                "開始成功｜移動紅管畫點開始畫圖";
         }
 
         private void UpdateYellowHold(
@@ -1799,6 +2220,13 @@ namespace CSharp_YoloOnnx
         private void ResetYellowTracking()
         {
             yellowTipTracker.Reset();
+            redTubeTracker.Reset();
+            lastReliableLeftRedTubeWrist = null;
+            lastReliableRightRedTubeWrist = null;
+            lastLeftRedTubeWristSeenAt =
+                DateTime.MinValue;
+            lastRightRedTubeWristSeenAt =
+                DateTime.MinValue;
             yellowTrackingConfirmed = false;
             yellowCandidateStartedAt = DateTime.MinValue;
             yellowRawMissingSince = DateTime.MinValue;
@@ -2028,6 +2456,11 @@ namespace CSharp_YoloOnnx
 
         private string GetIdleInstruction()
         {
+            if (redTubeWristMode)
+            {
+                return "紅管靠近任一手腕｜停留 0.6 秒開始｜畫完停留 0.9 秒完成";
+            }
+
             return "黃色筆尖停留 0.6 秒開始｜畫完停留 0.9 秒完成";
         }
 
@@ -2599,6 +3032,91 @@ namespace CSharp_YoloOnnx
                 (keypoint.Y - _padY) / _ratio);
         }
 
+        private void GetReliablePoseWrists(
+            Detection person,
+            Size frameSize,
+            out PointF? leftWrist,
+            out PointF? rightWrist)
+        {
+            leftWrist = null;
+            rightWrist = null;
+            DateTime now = DateTime.Now;
+
+            if (person != null &&
+                person.Keypoints.Count > 10 &&
+                _ratio > 0f)
+            {
+                Keypoint leftKeypoint =
+                    person.Keypoints[9];
+                Keypoint rightKeypoint =
+                    person.Keypoints[10];
+
+                if (leftKeypoint.Score >=
+                    MinimumRedTubeWristScore)
+                {
+                    PointF point =
+                        KeypointToImagePoint(
+                            leftKeypoint);
+
+                    if (point.X >= 0f &&
+                        point.Y >= 0f &&
+                        point.X < frameSize.Width &&
+                        point.Y < frameSize.Height)
+                    {
+                        leftWrist = point;
+                        lastReliableLeftRedTubeWrist =
+                            point;
+                        lastLeftRedTubeWristSeenAt =
+                            now;
+                    }
+                }
+
+                if (rightKeypoint.Score >=
+                    MinimumRedTubeWristScore)
+                {
+                    PointF point =
+                        KeypointToImagePoint(
+                            rightKeypoint);
+
+                    if (point.X >= 0f &&
+                        point.Y >= 0f &&
+                        point.X < frameSize.Width &&
+                        point.Y < frameSize.Height)
+                    {
+                        rightWrist = point;
+                        lastReliableRightRedTubeWrist =
+                            point;
+                        lastRightRedTubeWristSeenAt =
+                            now;
+                    }
+                }
+            }
+
+            if (!leftWrist.HasValue &&
+                lastReliableLeftRedTubeWrist.HasValue &&
+                lastLeftRedTubeWristSeenAt !=
+                    DateTime.MinValue &&
+                (now - lastLeftRedTubeWristSeenAt)
+                    .TotalMilliseconds <=
+                RedTubeWristGraceMs)
+            {
+                leftWrist =
+                    lastReliableLeftRedTubeWrist;
+            }
+
+            if (!rightWrist.HasValue &&
+                lastReliableRightRedTubeWrist.HasValue &&
+                lastRightRedTubeWristSeenAt !=
+                    DateTime.MinValue &&
+                (now - lastRightRedTubeWristSeenAt)
+                    .TotalMilliseconds <=
+                RedTubeWristGraceMs)
+            {
+                rightWrist =
+                    lastReliableRightRedTubeWrist;
+            }
+        }
+
         private float GetMaximumFingertipJump(Detection person)
         {
             if (person.Keypoints.Count <= 6 ||
@@ -2912,6 +3430,10 @@ namespace CSharp_YoloOnnx
             UpdateGame(main, copy);
             float overlayScale =
                 GetOverlayScale(copy.Size);
+            IEnumerable<Detection> overlayBoxes =
+                showPoseOverlay && boxes != null
+                    ? boxes
+                    : Enumerable.Empty<Detection>();
 
             using (Graphics g = Graphics.FromImage(copy))
             using (Pen mainPen = new Pen(
@@ -2955,7 +3477,7 @@ namespace CSharp_YoloOnnx
                 // 軌跡（畫在最上層前）
                 DrawHandTrail(g, overlayScale);
 
-                foreach (var b in boxes)
+                foreach (var b in overlayBoxes)
                 {
                     bool isMain = (main != null && b == main);
                     var pen = isMain ? mainPen : otherPen;
@@ -3262,6 +3784,68 @@ namespace CSharp_YoloOnnx
 
             PointF point = displayedFingertipPoint.Value;
 
+            if (redTubeWristMode)
+            {
+                using (Pen markerPen = new Pen(
+                    Color.Red,
+                    4f * overlayScale))
+                using (Brush centerBrush =
+                    new SolidBrush(Color.White))
+                using (Font markerFont = new Font(
+                    "Microsoft JhengHei UI",
+                    11f * overlayScale,
+                    FontStyle.Bold))
+                {
+                    graphics.DrawEllipse(
+                        markerPen,
+                        point.X - 12f * overlayScale,
+                        point.Y - 12f * overlayScale,
+                        24f * overlayScale,
+                        24f * overlayScale);
+                    graphics.FillEllipse(
+                        centerBrush,
+                        point.X - 3f * overlayScale,
+                        point.Y - 3f * overlayScale,
+                        6f * overlayScale,
+                        6f * overlayScale);
+                    graphics.DrawString(
+                        "紅管畫點",
+                        markerFont,
+                        Brushes.Red,
+                        point.X + 15f * overlayScale,
+                        point.Y - 14f * overlayScale);
+
+                    int delay =
+                        gameState == GameState.Idle
+                            ? YellowStartHoldMs
+                            : YellowFinishHoldMs;
+                    int progress = GetProgressPercent(
+                        yellowHoldStartedAt,
+                        delay,
+                        DateTime.Now);
+
+                    if (progress > 0)
+                    {
+                        using (Pen progressPen =
+                            new Pen(
+                                Color.Lime,
+                                4f * overlayScale))
+                        {
+                            graphics.DrawArc(
+                                progressPen,
+                                point.X - 17f * overlayScale,
+                                point.Y - 17f * overlayScale,
+                                34f * overlayScale,
+                                34f * overlayScale,
+                                -90f,
+                                360f * progress / 100f);
+                        }
+                    }
+                }
+
+                return;
+            }
+
             if (yellowTipMode)
             {
                 using (Pen markerPen = new Pen(
@@ -3564,7 +4148,10 @@ namespace CSharp_YoloOnnx
                 pose.InferenceMilliseconds.ToString("0") +
                 " ms/" +
                 poseFramesPerSecond.ToString("0.0") +
-                " FPS | HAND " +
+                " FPS | " +
+                (redTubeWristMode
+                    ? "TUBE "
+                    : "HAND ") +
                 latestHandInferenceMilliseconds
                     .ToString("0") +
                 " ms | " +
