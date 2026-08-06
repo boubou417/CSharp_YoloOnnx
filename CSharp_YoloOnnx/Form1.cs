@@ -40,7 +40,7 @@ namespace CSharp_YoloOnnx
         List<int> drawingStrokeStartIndices = new List<int>();
 
         const int MinimumDrawingPoints = 12;
-        const int FinishedDisplayMs = 2500;
+        const int FinishedDisplayMs = 1800;
         const int MagicAnimationDisplayMs = 1800;
         const int FingertipMissingBreakMs = 500;
         const int FingertipMarkerVisibleMs = 400;
@@ -285,7 +285,7 @@ namespace CSharp_YoloOnnx
         {
             InitializeComponent();
 
-            Text = "CSharp YOLO ONNX V1.5.14 Structure-Aware Shape Scoring";
+            Text = "CSharp YOLO ONNX V1.5.15 Endpoint-Locked Yellow Tracking";
             panelToolBar.Dock = DockStyle.Top;
             panelToolBar.Height = 40;
             panelStatusBar.Dock = DockStyle.Bottom;
@@ -316,7 +316,7 @@ namespace CSharp_YoloOnnx
             string modelPath = "yolov8n-pose.onnx";
             InitializeYoloSession(modelPath);
             Text =
-                "CSharp YOLO ONNX V1.5.14 Structure-Aware Shape Scoring | " +
+                "CSharp YOLO ONNX V1.5.15 Endpoint-Locked Yellow Tracking | " +
                 yoloExecutionProvider;
         }
 

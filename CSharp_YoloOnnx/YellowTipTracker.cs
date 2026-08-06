@@ -34,6 +34,8 @@ namespace CSharp_YoloOnnx
         private const float MaximumRedTubeFillRatio = 0.62f;
         private const float MinimumRedTubeElongation = 1.8f;
         private const float MaximumYellowComponentSpan = 180f;
+        private const float MinimumRedEndpointDistanceRatio = 0.65f;
+        private const float MaximumYellowOnlyPredictionDistance = 110f;
 
         private bool[] mask;
         private int[] queue;
@@ -465,6 +467,20 @@ namespace CSharp_YoloOnnx
                 float normalizedDistance =
                     distance /
                     Math.Max(0.5f, resolutionScale);
+
+                // Yellow-only tracking is retained for speed and brief red
+                // occlusion, but it may not jump to a distant yellow object in
+                // the predicted ROI. A candidate with valid red-tube endpoint
+                // support is exempt so genuine fast motion can still recover.
+                if (allowYellowOnly &&
+                    !hasRedSupport &&
+                    hasReference &&
+                    normalizedDistance >
+                        MaximumYellowOnlyPredictionDistance)
+                {
+                    continue;
+                }
+
                 float score =
                     normalizedCount -
                     normalizedDistance *
@@ -715,6 +731,32 @@ namespace CSharp_YoloOnnx
 
                 if (elongation < MinimumRedTubeElongation)
                     continue;
+
+                float componentSpanX =
+                    Math.Max(0, componentWidth - 1) *
+                    sampleStep;
+                float componentSpanY =
+                    Math.Max(0, componentHeight - 1) *
+                    sampleStep;
+                float componentSpanSquared =
+                    componentSpanX * componentSpanX +
+                    componentSpanY * componentSpanY;
+                float minimumEndpointDistanceSquared =
+                    componentSpanSquared *
+                    MinimumRedEndpointDistanceRatio *
+                    MinimumRedEndpointDistanceRatio;
+
+                // Merely touching red/orange somewhere is insufficient. The
+                // yellow tape must sit near one end of the elongated red tube:
+                // from the yellow center, the red component must extend mostly
+                // in one direction. A yellow object beside the middle of a red
+                // cable or warm-colored background fails this inexpensive test.
+                if (componentSpanSquared > 0f &&
+                    farthestSquared <
+                        minimumEndpointDistanceSquared)
+                {
+                    continue;
+                }
 
                 return true;
             }

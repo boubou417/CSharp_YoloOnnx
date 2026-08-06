@@ -419,16 +419,18 @@ namespace CSharp_YoloOnnx
         {
             ShapeDescriptor drawingDescriptor = DescribeShape(drawingMask);
             ShapeKind templateKind = ClassifyTemplate(templateDescriptor);
+            double[,] drawingDistanceMap = BuildDistanceMap(drawingMask);
             double detailScore = CalculateRawMaskScore(
                 drawingMask,
                 templateMask,
-                templateDistanceMap);
+                templateDistanceMap,
+                drawingDistanceMap);
 
             double broadCloseness = HarmonicMean(
                 MeasureBroadCloseness(drawingMask, templateDistanceMap),
                 MeasureBroadCloseness(
                     templateMask,
-                    BuildDistanceMap(drawingMask)));
+                    drawingDistanceMap));
             double radialScore = CompareRadialProfiles(
                 drawingDescriptor.RadialProfile,
                 templateDescriptor.RadialProfile);
@@ -519,7 +521,8 @@ namespace CSharp_YoloOnnx
         private static double CalculateRawMaskScore(
             bool[,] drawingMask,
             bool[,] templateMask,
-            double[,] templateDistanceMap)
+            double[,] templateDistanceMap,
+            double[,] drawingDistanceMap)
         {
             int drawingCount = CountPixels(drawingMask);
             int templateCount = CountPixels(templateMask);
@@ -527,7 +530,6 @@ namespace CSharp_YoloOnnx
             if (drawingCount == 0 || templateCount == 0)
                 return 0d;
 
-            double[,] drawingDistanceMap = BuildDistanceMap(drawingMask);
             DistanceStatistics drawingToTemplate = MeasureDistance(
                 drawingMask,
                 templateDistanceMap);

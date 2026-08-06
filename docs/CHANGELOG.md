@@ -1,5 +1,14 @@
 # 版本紀錄
 
+## V1.5.15 Endpoint-Locked Yellow Tracking Test
+
+- Require the yellow marker to touch the endpoint of an elongated red-tube component during initial acquisition and true-loss reacquisition.
+- Reject yellow-only ROI candidates that are too far from the velocity-predicted location while still allowing candidates with valid red endpoint support to recover from fast motion.
+- Keep locked-frame tracking on the existing full-resolution predictive ROI path so the added background rejection does not add another image scan or YOLO inference.
+- Reduce the post-score finished-state delay from 2.5 seconds to the existing 1.8-second magic-animation duration.
+- Reuse each rotated drawing's distance map for both structural and fine-detail scoring to reduce synchronous score-computation time.
+- Preserve V1.5.14 target-specific star, circle, and triangle scoring.
+
 ## V1.5.14 Structure-Aware Shape Scoring Test
 
 - Split similarity scoring into an overall-structure stage and a fine-detail stage.
