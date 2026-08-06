@@ -363,7 +363,8 @@ namespace CSharp_YoloOnnx
         private const double StrictCoverageDistance = 5d;
         private const double StructuralBroadSigma = 24d;
         private const int RadialBinCount = 48;
-        private const double MinimumRecognizableStructure = 0.58d;
+        private const double MinimumRecognizableStructure = 0.50d;
+        private const double RadialPeakProminence = 0.025d;
         private const double DiagonalDistance = 1.4142135623730951d;
         private const double InfiniteDistance = 1000000d;
         private static readonly float[] RotationCandidates =
@@ -417,6 +418,7 @@ namespace CSharp_YoloOnnx
             ShapeDescriptor templateDescriptor)
         {
             ShapeDescriptor drawingDescriptor = DescribeShape(drawingMask);
+            ShapeKind templateKind = ClassifyTemplate(templateDescriptor);
             double detailScore = CalculateRawMaskScore(
                 drawingMask,
                 templateMask,
@@ -447,12 +449,31 @@ namespace CSharp_YoloOnnx
                 projectionScore * 0.15d +
                 topologyScore * 0.15d;
 
+            ShapeGateResult shapeGate = EvaluateShapeGate(
+                templateKind,
+                drawingDescriptor,
+                templateDescriptor);
+
             // A single line can pass close to several template pixels, but it is
             // not a complete shape. Keep highly linear drawings below 25 points.
             if (drawingDescriptor.SecondaryAxisRatio < 0.035d ||
                 drawingDescriptor.OccupiedRadialBins < RadialBinCount * 0.30d)
             {
                 return Math.Min(25d, structureScore * 35d);
+            }
+
+            // Broad overlap is not shape recognition. A circle or triangle can
+            // cross many pixels of a star template, so it must not receive the
+            // 70-point recognizable-shape base until the target-specific gate
+            // (radial peaks, closure and concavity) has passed.
+            if (!shapeGate.Passed)
+            {
+                return Math.Min(
+                    39d,
+                    8d +
+                    structureScore * 18d +
+                    detailScore * 10d +
+                    shapeGate.Confidence * 4d);
             }
 
             // Excessive branches are characteristic of scribbles. Allow a few
@@ -468,6 +489,7 @@ namespace CSharp_YoloOnnx
                 templateDescriptor.JunctionClusters -
                 junctionTolerance);
             structureScore *= Math.Exp(-0.08d * extraJunctions);
+            structureScore *= 0.85d + shapeGate.Confidence * 0.15d;
 
             if (structureScore < 0.38d)
                 return 40d * structureScore / 0.38d;
@@ -640,6 +662,23 @@ namespace CSharp_YoloOnnx
             NormalizeProfile(horizontal);
             NormalizeProfile(vertical);
 
+            double radialMean = 0d;
+            for (int i = 0; i < radial.Length; i++)
+                radialMean += radial[i];
+            radialMean /= Math.Max(1, radial.Length);
+
+            double radialVariance = 0d;
+            double minimumRadialCoverage = 1d;
+            for (int i = 0; i < radial.Length; i++)
+            {
+                double difference = radial[i] - radialMean;
+                radialVariance += difference * difference;
+                minimumRadialCoverage = Math.Min(
+                    minimumRadialCoverage,
+                    radial[i]);
+            }
+            radialVariance /= Math.Max(1, radial.Length);
+
             double trace = covarianceXX + covarianceYY;
             double determinant =
                 covarianceXX * covarianceYY -
@@ -665,8 +704,191 @@ namespace CSharp_YoloOnnx
                 Endpoints = endpoints,
                 JunctionClusters = CountComponents(junctionMask),
                 OccupiedRadialBins = occupiedBins,
-                SecondaryAxisRatio = major <= 0d ? 0d : minor / major
+                SecondaryAxisRatio = major <= 0d ? 0d : minor / major,
+                RadialPeakCount = CountRadialPeaks(radial),
+                RadialCoefficientVariation =
+                    radialMean <= 0d
+                        ? 0d
+                        : Math.Sqrt(radialVariance) / radialMean,
+                MinimumRadialCoverage = minimumRadialCoverage
             };
+        }
+
+        private static int CountRadialPeaks(double[] radialProfile)
+        {
+            double[] smoothed = new double[radialProfile.Length];
+            double[] kernel = { 0.0625d, 0.25d, 0.375d, 0.25d, 0.0625d };
+
+            for (int i = 0; i < radialProfile.Length; i++)
+            {
+                for (int offset = -2; offset <= 2; offset++)
+                {
+                    int index =
+                        (i + offset + radialProfile.Length) %
+                        radialProfile.Length;
+                    smoothed[i] += radialProfile[index] * kernel[offset + 2];
+                }
+            }
+
+            int peaks = 0;
+            for (int i = 0; i < smoothed.Length; i++)
+            {
+                double current = smoothed[i];
+                double previous = smoothed[
+                    (i - 1 + smoothed.Length) % smoothed.Length];
+                double next = smoothed[(i + 1) % smoothed.Length];
+                double leftValley = smoothed[
+                    (i - 2 + smoothed.Length) % smoothed.Length];
+                double rightValley = smoothed[(i + 2) % smoothed.Length];
+
+                if (current > previous &&
+                    current >= next &&
+                    current - Math.Min(leftValley, rightValley) >=
+                        RadialPeakProminence)
+                {
+                    peaks++;
+                }
+            }
+
+            return peaks;
+        }
+
+        private static ShapeKind ClassifyTemplate(ShapeDescriptor descriptor)
+        {
+            if (descriptor.RadialPeakCount >= 4 &&
+                descriptor.RadialPeakCount <= 7 &&
+                descriptor.RadialCoefficientVariation >= 0.16d)
+            {
+                return ShapeKind.Star;
+            }
+
+            if (descriptor.RadialPeakCount <= 2 &&
+                descriptor.RadialCoefficientVariation <= 0.24d &&
+                descriptor.MinimumRadialCoverage >= 0.45d)
+            {
+                return ShapeKind.Circle;
+            }
+
+            if (descriptor.RadialPeakCount >= 2 &&
+                descriptor.RadialPeakCount <= 4)
+            {
+                return ShapeKind.Triangle;
+            }
+
+            return ShapeKind.Unknown;
+        }
+
+        private static ShapeGateResult EvaluateShapeGate(
+            ShapeKind kind,
+            ShapeDescriptor drawing,
+            ShapeDescriptor template)
+        {
+            if (kind == ShapeKind.Star)
+            {
+                double peakScore = Math.Exp(
+                    -0.70d * Math.Abs(drawing.RadialPeakCount - 5));
+                double concavityScore = RangeScore(
+                    drawing.RadialCoefficientVariation,
+                    0.16d,
+                    0.50d,
+                    0.10d);
+                double coverageScore = RangeScore(
+                    drawing.MinimumRadialCoverage,
+                    0.14d,
+                    0.62d,
+                    0.12d);
+                bool passed =
+                    drawing.RadialPeakCount >= 4 &&
+                    drawing.RadialPeakCount <= 6 &&
+                    drawing.RadialCoefficientVariation >= 0.16d &&
+                    drawing.RadialCoefficientVariation <= 0.55d &&
+                    drawing.MinimumRadialCoverage >= 0.14d;
+
+                return new ShapeGateResult(
+                    passed,
+                    peakScore * 0.55d +
+                    concavityScore * 0.30d +
+                    coverageScore * 0.15d);
+            }
+
+            if (kind == ShapeKind.Circle)
+            {
+                double peakScore = Math.Exp(
+                    -0.90d * Math.Max(0, drawing.RadialPeakCount - 1));
+                double roundnessScore = RangeScore(
+                    drawing.RadialCoefficientVariation,
+                    0d,
+                    0.30d,
+                    0.12d);
+                double closureScore = RangeScore(
+                    drawing.MinimumRadialCoverage,
+                    0.45d,
+                    1d,
+                    0.16d);
+                bool passed =
+                    drawing.RadialPeakCount <= 2 &&
+                    drawing.RadialCoefficientVariation <= 0.34d &&
+                    drawing.MinimumRadialCoverage >= 0.40d &&
+                    drawing.Endpoints <= 10;
+
+                return new ShapeGateResult(
+                    passed,
+                    peakScore * 0.35d +
+                    roundnessScore * 0.35d +
+                    closureScore * 0.30d);
+            }
+
+            if (kind == ShapeKind.Triangle)
+            {
+                double peakScore = Math.Exp(
+                    -0.75d * Math.Abs(drawing.RadialPeakCount - 3));
+                double cornerScore = RangeScore(
+                    drawing.RadialCoefficientVariation,
+                    0.10d,
+                    0.42d,
+                    0.12d);
+                double closureScore = RangeScore(
+                    drawing.MinimumRadialCoverage,
+                    0.28d,
+                    0.82d,
+                    0.14d);
+                bool passed =
+                    drawing.RadialPeakCount >= 2 &&
+                    drawing.RadialPeakCount <= 4 &&
+                    drawing.RadialCoefficientVariation >= 0.10d &&
+                    drawing.RadialCoefficientVariation <= 0.48d &&
+                    drawing.MinimumRadialCoverage >= 0.25d &&
+                    drawing.Endpoints <= 10;
+
+                return new ShapeGateResult(
+                    passed,
+                    peakScore * 0.50d +
+                    cornerScore * 0.30d +
+                    closureScore * 0.20d);
+            }
+
+            // Preserve generic comparison for an unrecognized custom template,
+            // but require a stronger structural match than the three supported
+            // shape classes.
+            double genericConfidence = CompareRadialProfiles(
+                drawing.RadialProfile,
+                template.RadialProfile);
+            return new ShapeGateResult(
+                genericConfidence >= 0.72d,
+                genericConfidence);
+        }
+
+        private static double RangeScore(
+            double value,
+            double minimum,
+            double maximum,
+            double softness)
+        {
+            if (value >= minimum && value <= maximum)
+                return 1d;
+            if (value < minimum)
+                return Math.Exp(-(minimum - value) / softness);
+            return Math.Exp(-(value - maximum) / softness);
         }
 
         private static int CountNeighbours(bool[,] mask, int x, int y)
@@ -1356,6 +1578,29 @@ namespace CSharp_YoloOnnx
             public int JunctionClusters { get; set; }
             public int OccupiedRadialBins { get; set; }
             public double SecondaryAxisRatio { get; set; }
+            public int RadialPeakCount { get; set; }
+            public double RadialCoefficientVariation { get; set; }
+            public double MinimumRadialCoverage { get; set; }
+        }
+
+        private enum ShapeKind
+        {
+            Unknown,
+            Star,
+            Circle,
+            Triangle
+        }
+
+        private sealed class ShapeGateResult
+        {
+            public ShapeGateResult(bool passed, double confidence)
+            {
+                Passed = passed;
+                Confidence = Clamp01(confidence);
+            }
+
+            public bool Passed { get; private set; }
+            public double Confidence { get; private set; }
         }
     }
 }

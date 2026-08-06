@@ -8,6 +8,9 @@
 - Continue ignoring original drawing position, scale, stroke thickness, and small hand-angle differences.
 - Limit highly linear or angularly incomplete drawings to 25 points even when they cross template pixels.
 - Penalize excessive junctions so dense scribbles cannot score well merely by touching many parts of the template.
+- Classify supported templates as star, circle, or triangle from their radial corner structure.
+- Require five alternating radial peaks for stars, a smooth closed radial envelope for circles, and three dominant corners for triangles before granting the 70-point recognizable-shape base.
+- Cap drawings that fail the selected shape's required structure below 40 points even when they cross or approach many template pixels.
 - Keep the V1.5.13 CUDA/CPU diagnostics, locked yellow tracking, drawing storage, and animation behavior.
 
 ## V1.5.13 Live GPU Diagnostics Test
