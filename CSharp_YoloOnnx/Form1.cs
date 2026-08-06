@@ -285,7 +285,7 @@ namespace CSharp_YoloOnnx
         {
             InitializeComponent();
 
-            Text = "CSharp YOLO ONNX V1.5.13 Live GPU Diagnostics";
+            Text = "CSharp YOLO ONNX V1.5.14 Structure-Aware Shape Scoring";
             panelToolBar.Dock = DockStyle.Top;
             panelToolBar.Height = 40;
             panelStatusBar.Dock = DockStyle.Bottom;
@@ -316,7 +316,7 @@ namespace CSharp_YoloOnnx
             string modelPath = "yolov8n-pose.onnx";
             InitializeYoloSession(modelPath);
             Text =
-                "CSharp YOLO ONNX V1.5.13 Live GPU Diagnostics | " +
+                "CSharp YOLO ONNX V1.5.14 Structure-Aware Shape Scoring | " +
                 yoloExecutionProvider;
         }
 
@@ -3629,7 +3629,7 @@ namespace CSharp_YoloOnnx
                 score.ToString("0.0") +
                 " 分";
             lblSimilarityScore.ForeColor =
-                score >= 75d
+                score >= 70d
                     ? Color.Green
                     : score >= 55d
                         ? Color.DarkOrange

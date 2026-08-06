@@ -361,8 +361,9 @@ namespace CSharp_YoloOnnx
         private const double FineDistanceSigma = 5d;
         private const double BroadDistanceSigma = 13d;
         private const double StrictCoverageDistance = 5d;
-        private const double CalibrationMidpoint = 0.48d;
-        private const double CalibrationSteepness = 14d;
+        private const double StructuralBroadSigma = 24d;
+        private const int RadialBinCount = 48;
+        private const double MinimumRecognizableStructure = 0.58d;
         private const double DiagonalDistance = 1.4142135623730951d;
         private const double InfiniteDistance = 1000000d;
         private static readonly float[] RotationCandidates =
@@ -388,23 +389,109 @@ namespace CSharp_YoloOnnx
                 return 0d;
 
             double[,] templateDistanceMap = BuildDistanceMap(templateMask);
-            double bestRawScore = 0d;
+            ShapeDescriptor templateDescriptor = DescribeShape(templateMask);
+            double bestScore = 0d;
 
             for (int i = 0; i < RotationCandidates.Length; i++)
             {
                 bool[,] rotatedDrawing = RotateMask(
                     drawingMask,
                     RotationCandidates[i]);
-                double rawScore = CalculateRawMaskScore(
+                double score = CalculateLayeredScore(
                     rotatedDrawing,
                     templateMask,
-                    templateDistanceMap);
+                    templateDistanceMap,
+                    templateDescriptor);
 
-                if (rawScore > bestRawScore)
-                    bestRawScore = rawScore;
+                if (score > bestScore)
+                    bestScore = score;
             }
 
-            return CalibrateScore(bestRawScore);
+            return bestScore;
+        }
+
+        private static double CalculateLayeredScore(
+            bool[,] drawingMask,
+            bool[,] templateMask,
+            double[,] templateDistanceMap,
+            ShapeDescriptor templateDescriptor)
+        {
+            ShapeDescriptor drawingDescriptor = DescribeShape(drawingMask);
+            double detailScore = CalculateRawMaskScore(
+                drawingMask,
+                templateMask,
+                templateDistanceMap);
+
+            double broadCloseness = HarmonicMean(
+                MeasureBroadCloseness(drawingMask, templateDistanceMap),
+                MeasureBroadCloseness(
+                    templateMask,
+                    BuildDistanceMap(drawingMask)));
+            double radialScore = CompareRadialProfiles(
+                drawingDescriptor.RadialProfile,
+                templateDescriptor.RadialProfile);
+            double projectionScore = HarmonicMean(
+                CompareProfiles(
+                    drawingDescriptor.HorizontalProjection,
+                    templateDescriptor.HorizontalProjection),
+                CompareProfiles(
+                    drawingDescriptor.VerticalProjection,
+                    templateDescriptor.VerticalProjection));
+            double topologyScore = CompareTopology(
+                drawingDescriptor,
+                templateDescriptor);
+
+            double structureScore =
+                broadCloseness * 0.35d +
+                radialScore * 0.35d +
+                projectionScore * 0.15d +
+                topologyScore * 0.15d;
+
+            // A single line can pass close to several template pixels, but it is
+            // not a complete shape. Keep highly linear drawings below 25 points.
+            if (drawingDescriptor.SecondaryAxisRatio < 0.035d ||
+                drawingDescriptor.OccupiedRadialBins < RadialBinCount * 0.30d)
+            {
+                return Math.Min(25d, structureScore * 35d);
+            }
+
+            // Excessive branches are characteristic of scribbles. Allow a few
+            // additional junctions for imperfect hand drawing, then reduce the
+            // structural confidence instead of rewarding incidental overlap.
+            int junctionTolerance = Math.Max(
+                8,
+                (int)Math.Round(
+                    templateDescriptor.JunctionClusters * 0.35d));
+            int extraJunctions = Math.Max(
+                0,
+                drawingDescriptor.JunctionClusters -
+                templateDescriptor.JunctionClusters -
+                junctionTolerance);
+            structureScore *= Math.Exp(-0.08d * extraJunctions);
+
+            if (structureScore < 0.38d)
+                return 40d * structureScore / 0.38d;
+
+            if (structureScore < MinimumRecognizableStructure)
+            {
+                return 40d +
+                    30d *
+                    (structureScore - 0.38d) /
+                    (MinimumRecognizableStructure - 0.38d);
+            }
+
+            // Once the overall shape is recognizable it earns a 70-point base.
+            // Exact line placement only contributes the remaining 30 points.
+            double structureBonus = Clamp01(
+                (structureScore - MinimumRecognizableStructure) /
+                (1d - MinimumRecognizableStructure));
+            double detailBonus = Clamp01(
+                (detailScore - 0.30d) / 0.70d);
+
+            return Math.Min(
+                100d,
+                70d + 30d *
+                (structureBonus * 0.35d + detailBonus * 0.65d));
         }
 
         private static double CalculateRawMaskScore(
@@ -453,23 +540,252 @@ namespace CSharp_YoloOnnx
             return Clamp01(rawScore);
         }
 
-        private static double CalibrateScore(double rawScore)
+        private static double MeasureBroadCloseness(
+            bool[,] source,
+            double[,] targetDistanceMap)
         {
-            double minimum = LogisticCalibration(0d);
-            double maximum = LogisticCalibration(1d);
-            double calibrated =
-                (LogisticCalibration(Clamp01(rawScore)) - minimum) /
-                (maximum - minimum);
+            double total = 0d;
+            int count = 0;
+            int height = source.GetLength(0);
+            int width = source.GetLength(1);
 
-            return Clamp01(calibrated) * 100d;
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    if (!source[y, x])
+                        continue;
+
+                    double distance = targetDistanceMap[y, x];
+                    total += Math.Exp(
+                        -(distance * distance) /
+                        (2d * StructuralBroadSigma * StructuralBroadSigma));
+                    count++;
+                }
+            }
+
+            return count == 0 ? 0d : total / count;
         }
 
-        private static double LogisticCalibration(double rawScore)
+        private static ShapeDescriptor DescribeShape(bool[,] mask)
         {
-            return 1d /
-                (1d + Math.Exp(
-                    -CalibrationSteepness *
-                    (rawScore - CalibrationMidpoint)));
+            int height = mask.GetLength(0);
+            int width = mask.GetLength(1);
+            double centerX = 0d;
+            double centerY = 0d;
+            int count = 0;
+
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    if (!mask[y, x])
+                        continue;
+
+                    centerX += x;
+                    centerY += y;
+                    count++;
+                }
+            }
+
+            if (count == 0)
+                return new ShapeDescriptor();
+
+            centerX /= count;
+            centerY /= count;
+
+            double covarianceXX = 0d;
+            double covarianceYY = 0d;
+            double covarianceXY = 0d;
+            double[] radial = new double[RadialBinCount];
+            double[] horizontal = new double[ComparisonCanvasSize];
+            double[] vertical = new double[ComparisonCanvasSize];
+            int endpoints = 0;
+            bool[,] junctionMask = new bool[height, width];
+
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    if (!mask[y, x])
+                        continue;
+
+                    double dx = x - centerX;
+                    double dy = y - centerY;
+                    covarianceXX += dx * dx;
+                    covarianceYY += dy * dy;
+                    covarianceXY += dx * dy;
+                    horizontal[y]++;
+                    vertical[x]++;
+
+                    double angle = Math.Atan2(dy, dx);
+                    if (angle < 0d)
+                        angle += Math.PI * 2d;
+                    int bin = Math.Min(
+                        RadialBinCount - 1,
+                        (int)(angle / (Math.PI * 2d) * RadialBinCount));
+                    radial[bin] = Math.Max(
+                        radial[bin],
+                        Math.Sqrt(dx * dx + dy * dy));
+
+                    int neighbours = CountNeighbours(mask, x, y);
+                    if (neighbours == 1)
+                        endpoints++;
+                    else if (neighbours >= 3)
+                        junctionMask[y, x] = true;
+                }
+            }
+
+            NormalizeProfile(radial);
+            NormalizeProfile(horizontal);
+            NormalizeProfile(vertical);
+
+            double trace = covarianceXX + covarianceYY;
+            double determinant =
+                covarianceXX * covarianceYY -
+                covarianceXY * covarianceXY;
+            double root = Math.Sqrt(Math.Max(
+                0d,
+                trace * trace * 0.25d - determinant));
+            double major = trace * 0.5d + root;
+            double minor = trace * 0.5d - root;
+
+            int occupiedBins = 0;
+            for (int i = 0; i < radial.Length; i++)
+            {
+                if (radial[i] > 0.05d)
+                    occupiedBins++;
+            }
+
+            return new ShapeDescriptor
+            {
+                RadialProfile = radial,
+                HorizontalProjection = horizontal,
+                VerticalProjection = vertical,
+                Endpoints = endpoints,
+                JunctionClusters = CountComponents(junctionMask),
+                OccupiedRadialBins = occupiedBins,
+                SecondaryAxisRatio = major <= 0d ? 0d : minor / major
+            };
+        }
+
+        private static int CountNeighbours(bool[,] mask, int x, int y)
+        {
+            int count = 0;
+            for (int offsetY = -1; offsetY <= 1; offsetY++)
+            {
+                for (int offsetX = -1; offsetX <= 1; offsetX++)
+                {
+                    if ((offsetX == 0 && offsetY == 0) ||
+                        x + offsetX < 0 ||
+                        x + offsetX >= mask.GetLength(1) ||
+                        y + offsetY < 0 ||
+                        y + offsetY >= mask.GetLength(0))
+                    {
+                        continue;
+                    }
+
+                    if (mask[y + offsetY, x + offsetX])
+                        count++;
+                }
+            }
+            return count;
+        }
+
+        private static int CountComponents(bool[,] mask)
+        {
+            bool[,] visited = new bool[mask.GetLength(0), mask.GetLength(1)];
+            Queue<Point> pending = new Queue<Point>();
+            int components = 0;
+
+            for (int y = 0; y < mask.GetLength(0); y++)
+            {
+                for (int x = 0; x < mask.GetLength(1); x++)
+                {
+                    if (!mask[y, x] || visited[y, x])
+                        continue;
+
+                    components++;
+                    pending.Enqueue(new Point(x, y));
+                    visited[y, x] = true;
+
+                    while (pending.Count > 0)
+                    {
+                        Point point = pending.Dequeue();
+                        for (int oy = -1; oy <= 1; oy++)
+                        {
+                            for (int ox = -1; ox <= 1; ox++)
+                            {
+                                int nx = point.X + ox;
+                                int ny = point.Y + oy;
+                                if (nx < 0 || ny < 0 ||
+                                    nx >= mask.GetLength(1) ||
+                                    ny >= mask.GetLength(0) ||
+                                    visited[ny, nx] || !mask[ny, nx])
+                                {
+                                    continue;
+                                }
+
+                                visited[ny, nx] = true;
+                                pending.Enqueue(new Point(nx, ny));
+                            }
+                        }
+                    }
+                }
+            }
+            return components;
+        }
+
+        private static void NormalizeProfile(double[] profile)
+        {
+            double maximum = 0d;
+            for (int i = 0; i < profile.Length; i++)
+                maximum = Math.Max(maximum, profile[i]);
+
+            if (maximum <= 0d)
+                return;
+
+            for (int i = 0; i < profile.Length; i++)
+                profile[i] /= maximum;
+        }
+
+        private static double CompareRadialProfiles(
+            double[] first,
+            double[] second)
+        {
+            double error = 0d;
+            double coverage = 0d;
+            for (int i = 0; i < first.Length; i++)
+            {
+                error += Math.Abs(first[i] - second[i]);
+                if (first[i] > 0.05d && second[i] > 0.05d)
+                    coverage++;
+            }
+
+            error /= Math.Max(1, first.Length);
+            coverage /= Math.Max(1, first.Length);
+            return Clamp01(Math.Exp(-2.8d * error) * (0.35d + 0.65d * coverage));
+        }
+
+        private static double CompareProfiles(double[] first, double[] second)
+        {
+            double difference = 0d;
+            for (int i = 0; i < first.Length; i++)
+                difference += Math.Abs(first[i] - second[i]);
+
+            return Math.Exp(-2d * difference / Math.Max(1, first.Length));
+        }
+
+        private static double CompareTopology(
+            ShapeDescriptor first,
+            ShapeDescriptor second)
+        {
+            double endpointScore = Math.Exp(
+                -0.22d * Math.Abs(first.Endpoints - second.Endpoints));
+            double junctionScore = Math.Exp(
+                -0.18d * Math.Abs(
+                    first.JunctionClusters - second.JunctionClusters));
+            return endpointScore * 0.45d + junctionScore * 0.55d;
         }
 
         private static double HarmonicMean(double first, double second)
@@ -1022,6 +1338,24 @@ namespace CSharp_YoloOnnx
             public double SoftCloseness { get; set; }
             public double StrictCoverage { get; set; }
             public double Percentile90Distance { get; set; }
+        }
+
+        private sealed class ShapeDescriptor
+        {
+            public ShapeDescriptor()
+            {
+                RadialProfile = new double[RadialBinCount];
+                HorizontalProjection = new double[ComparisonCanvasSize];
+                VerticalProjection = new double[ComparisonCanvasSize];
+            }
+
+            public double[] RadialProfile { get; set; }
+            public double[] HorizontalProjection { get; set; }
+            public double[] VerticalProjection { get; set; }
+            public int Endpoints { get; set; }
+            public int JunctionClusters { get; set; }
+            public int OccupiedRadialBins { get; set; }
+            public double SecondaryAxisRatio { get; set; }
         }
     }
 }

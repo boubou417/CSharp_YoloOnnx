@@ -1,5 +1,15 @@
 # 版本紀錄
 
+## V1.5.14 Structure-Aware Shape Scoring Test
+
+- Split similarity scoring into an overall-structure stage and a fine-detail stage.
+- Give a recognizable hand-drawn shape a 70-point base before using exact centerline placement for the remaining 30 points.
+- Compare broad bidirectional shape coverage, radial silhouette, horizontal/vertical projections, endpoints, and junction structure.
+- Continue ignoring original drawing position, scale, stroke thickness, and small hand-angle differences.
+- Limit highly linear or angularly incomplete drawings to 25 points even when they cross template pixels.
+- Penalize excessive junctions so dense scribbles cannot score well merely by touching many parts of the template.
+- Keep the V1.5.13 CUDA/CPU diagnostics, locked yellow tracking, drawing storage, and animation behavior.
+
 ## V1.5.13 Live GPU Diagnostics Test
 
 - Restore the independent WinForms diagnostics label at the bottom-right of the window.
