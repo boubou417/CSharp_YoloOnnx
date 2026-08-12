@@ -1,5 +1,15 @@
 # 版本紀錄
 
+## V1.5.16 Random Shape Challenge Test
+
+- Load a random `.png`, `.jpg`, `.jpeg`, or `.bmp` target from the output `Templates` folder when the application starts and after each completed round.
+- Avoid selecting the same target twice in a row when more than one template is available.
+- Show the active target in a compact, always-visible PictureBox at the upper-right of the camera area.
+- Keep the selected path fixed throughout drawing and scoring so the preview always matches the image used by the comparer.
+- Change the toolbar action to `隨機換圖`, available only while idle.
+- Copy every file in the project `Templates` folder to the build output so additional shapes can be added without editing the project file.
+- Preserve V1.5.15 yellow/red endpoint tracking and V1.5.14 target-specific scoring.
+
 ## V1.5.15 Endpoint-Locked Yellow Tracking Test
 
 - Require the yellow marker to touch the endpoint of an elongated red-tube component during initial acquisition and true-loss reacquisition.

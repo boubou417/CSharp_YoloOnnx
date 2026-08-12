@@ -115,7 +115,7 @@
     <Content Include="Assets\magic-cast-test.gif">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Include="Templates\template.png">
+    <Content Include="Templates\*.*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>

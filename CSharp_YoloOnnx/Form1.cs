@@ -94,8 +94,12 @@ namespace CSharp_YoloOnnx
         string drawingStatusText =
             "左右手皆可｜張開手掌 0.6 秒開始";
         string templateImagePath = string.Empty;
+        readonly Random templateRandom = new Random();
         double? lastDrawingScore;
         Button btnSelectTemplate;
+        Panel panelTemplatePreview;
+        PictureBox pBoxTemplatePreview;
+        Label lblTemplatePreview;
         Label lblSimilarityScore;
         Label lblAirDrawStatus;
         Label lblPerformanceDiagnostics;
@@ -285,7 +289,7 @@ namespace CSharp_YoloOnnx
         {
             InitializeComponent();
 
-            Text = "CSharp YOLO ONNX V1.5.15 Endpoint-Locked Yellow Tracking";
+            Text = "CSharp YOLO ONNX V1.5.16 Random Shape Challenge";
             panelToolBar.Dock = DockStyle.Top;
             panelToolBar.Height = 40;
             panelStatusBar.Dock = DockStyle.Bottom;
@@ -294,7 +298,7 @@ namespace CSharp_YoloOnnx
             pBox.Dock = DockStyle.Fill;
             pBox.SizeMode = PictureBoxSizeMode.Zoom;
             InitializeAirDrawControls();
-            TryLoadDefaultTemplate();
+            LoadRandomTemplate(false);
             if (!yellowTipMode)
                 InitializeFingertipTracker();
             InitializeMagicAnimation();
@@ -316,7 +320,7 @@ namespace CSharp_YoloOnnx
             string modelPath = "yolov8n-pose.onnx";
             InitializeYoloSession(modelPath);
             Text =
-                "CSharp YOLO ONNX V1.5.15 Endpoint-Locked Yellow Tracking | " +
+                "CSharp YOLO ONNX V1.5.16 Random Shape Challenge | " +
                 yoloExecutionProvider;
         }
 
@@ -436,6 +440,7 @@ namespace CSharp_YoloOnnx
                 yoloSession = null;
             }
             DisposeMagicAnimation();
+            DisposeTemplatePreview();
 
             if (fingertipTracker != null)
             {
@@ -568,7 +573,7 @@ namespace CSharp_YoloOnnx
             btnSelectTemplate = new Button
             {
                 Name = "btnSelectTemplate",
-                Text = "選擇比對圖",
+                Text = "隨機換圖",
                 Width = 110,
                 Height = 26,
                 Left = btnGrab.Right + 20,
@@ -577,6 +582,44 @@ namespace CSharp_YoloOnnx
 
             btnSelectTemplate.Click += btnSelectTemplate_Click;
             panelToolBar.Controls.Add(btnSelectTemplate);
+
+            panelTemplatePreview = new Panel
+            {
+                Name = "panelTemplatePreview",
+                Width = 156,
+                Height = 180,
+                BackColor = Color.White,
+                BorderStyle = BorderStyle.FixedSingle,
+                Anchor = AnchorStyles.Top | AnchorStyles.Right,
+                Left = Math.Max(0, panelImage.ClientSize.Width - 168),
+                Top = 12
+            };
+
+            lblTemplatePreview = new Label
+            {
+                Dock = DockStyle.Top,
+                Height = 28,
+                Text = "本回合目標",
+                TextAlign = ContentAlignment.MiddleCenter,
+                Font = new Font(
+                    "Microsoft JhengHei UI",
+                    10f,
+                    FontStyle.Bold),
+                ForeColor = Color.White,
+                BackColor = Color.FromArgb(190, 35, 35, 35)
+            };
+
+            pBoxTemplatePreview = new PictureBox
+            {
+                Dock = DockStyle.Fill,
+                SizeMode = PictureBoxSizeMode.Zoom,
+                BackColor = Color.Black
+            };
+
+            panelTemplatePreview.Controls.Add(pBoxTemplatePreview);
+            panelTemplatePreview.Controls.Add(lblTemplatePreview);
+            panelImage.Controls.Add(panelTemplatePreview);
+            panelTemplatePreview.BringToFront();
 
             lblSimilarityScore = new Label
             {
@@ -631,41 +674,156 @@ namespace CSharp_YoloOnnx
             lblPerformanceDiagnostics.BringToFront();
         }
 
-        private void TryLoadDefaultTemplate()
+        private void LoadRandomTemplate(bool avoidCurrent)
         {
-            string defaultTemplatePath = Path.Combine(
+            string templateDirectory = Path.Combine(
                 AppDomain.CurrentDomain.BaseDirectory,
-                "Templates",
-                "template.png");
+                "Templates");
 
-            if (!File.Exists(defaultTemplatePath))
+            if (!Directory.Exists(templateDirectory))
+            {
+                templateImagePath = string.Empty;
+                UpdateTemplatePreview(null, "找不到 Templates");
+                return;
+            }
+
+            string[] supportedExtensions =
+            {
+                ".png", ".jpg", ".jpeg", ".bmp"
+            };
+            string[] templates = Directory.GetFiles(templateDirectory)
+                .Where(path => supportedExtensions.Contains(
+                    Path.GetExtension(path),
+                    StringComparer.OrdinalIgnoreCase))
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            if (templates.Length == 0)
+            {
+                templateImagePath = string.Empty;
+                UpdateTemplatePreview(null, "Templates 沒有圖片");
+                return;
+            }
+
+            string[] candidates = templates;
+            if (avoidCurrent && templates.Length > 1)
+            {
+                candidates = templates
+                    .Where(path => !string.Equals(
+                        path,
+                        templateImagePath,
+                        StringComparison.OrdinalIgnoreCase))
+                    .ToArray();
+            }
+
+            string selected = candidates[
+                templateRandom.Next(candidates.Length)];
+
+            try
+            {
+                using (Image source = Image.FromFile(selected))
+                {
+                    UpdateTemplatePreview(
+                        new Bitmap(source),
+                        GetTemplateDisplayName(selected));
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("Template preview error: " + ex);
+                UpdateTemplatePreview(null, "圖片無法讀取");
+                return;
+            }
+
+            templateImagePath = selected;
+            drawingStatusText =
+                "本回合目標：" +
+                GetTemplateDisplayName(templateImagePath) +
+                "｜黃色筆尖停留開始";
+        }
+
+        private static string GetTemplateDisplayName(string path)
+        {
+            string name = Path.GetFileNameWithoutExtension(path);
+
+            if (string.Equals(
+                name,
+                "template",
+                StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(
+                    name,
+                    "star",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return "星星";
+            }
+
+            if (string.Equals(
+                name,
+                "circle",
+                StringComparison.OrdinalIgnoreCase))
+            {
+                return "圓形";
+            }
+
+            if (string.Equals(
+                name,
+                "triangle",
+                StringComparison.OrdinalIgnoreCase))
+            {
+                return "三角形";
+            }
+
+            return name;
+        }
+
+        private void UpdateTemplatePreview(
+            Image preview,
+            string displayName)
+        {
+            Action update = () =>
+            {
+                if (IsDisposed || pBoxTemplatePreview == null)
+                {
+                    preview?.Dispose();
+                    return;
+                }
+
+                Image old = pBoxTemplatePreview.Image;
+                pBoxTemplatePreview.Image = preview;
+                old?.Dispose();
+                lblTemplatePreview.Text =
+                    string.IsNullOrWhiteSpace(displayName)
+                        ? "本回合目標"
+                        : "目標：" + displayName;
+                panelTemplatePreview.BringToFront();
+            };
+
+            if (InvokeRequired)
+                BeginInvoke(update);
+            else
+                update();
+        }
+
+        private void DisposeTemplatePreview()
+        {
+            if (pBoxTemplatePreview == null)
                 return;
 
-            templateImagePath = defaultTemplatePath;
-            drawingStatusText =
-                "比對圖：" +
-                Path.GetFileName(templateImagePath) +
-                "｜黃色筆尖停留開始";
+            Image preview = pBoxTemplatePreview.Image;
+            pBoxTemplatePreview.Image = null;
+            preview?.Dispose();
         }
 
         private void btnSelectTemplate_Click(object sender, EventArgs e)
         {
-            using (OpenFileDialog dialog = new OpenFileDialog())
+            if (gameState != GameState.Idle)
             {
-                dialog.Title = "選擇要比對的字卡或圖卡";
-                dialog.Filter =
-                    "圖片檔案|*.png;*.jpg;*.jpeg;*.bmp|" +
-                    "所有檔案|*.*";
-
-                if (dialog.ShowDialog(this) != DialogResult.OK)
-                    return;
-
-                templateImagePath = dialog.FileName;
-                drawingStatusText =
-                    "比對圖：" +
-                    Path.GetFileName(templateImagePath) +
-                    "｜左右手張掌開始";
+                drawingStatusText = "完成本回合後才能更換目標圖案";
+                return;
             }
+
+            LoadRandomTemplate(true);
         }
 
         private void StreamBufferMode(INodeMap nodeMap)
@@ -1247,12 +1405,7 @@ namespace CSharp_YoloOnnx
                     displayedDrawingHand = DrawingHand.None;
                     waitingForOpenPalmReleaseAfterStart = false;
                     isWaving = false;
-                    drawingStatusText =
-                        string.IsNullOrWhiteSpace(templateImagePath)
-                            ? GetIdleInstruction()
-                            : "比對圖：" +
-                              Path.GetFileName(templateImagePath) +
-                              "｜左右手張掌開始";
+                    LoadRandomTemplate(true);
                 }
 
                 return;
@@ -1404,7 +1557,7 @@ namespace CSharp_YoloOnnx
                     yellowMovedAfterStart = false;
                     yellowMissingSince = DateTime.MinValue;
                     ResetYellowTracking();
-                    drawingStatusText = GetIdleInstruction();
+                    LoadRandomTemplate(true);
                 }
 
                 return;
