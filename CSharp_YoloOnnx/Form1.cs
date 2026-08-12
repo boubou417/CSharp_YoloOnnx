@@ -289,7 +289,7 @@ namespace CSharp_YoloOnnx
         {
             InitializeComponent();
 
-            Text = "CSharp YOLO ONNX V1.5.16 Random Shape Challenge";
+            Text = "CSharp YOLO ONNX V1.5.17 Square Shape Scoring";
             panelToolBar.Dock = DockStyle.Top;
             panelToolBar.Height = 40;
             panelStatusBar.Dock = DockStyle.Bottom;
@@ -320,7 +320,7 @@ namespace CSharp_YoloOnnx
             string modelPath = "yolov8n-pose.onnx";
             InitializeYoloSession(modelPath);
             Text =
-                "CSharp YOLO ONNX V1.5.16 Random Shape Challenge | " +
+                "CSharp YOLO ONNX V1.5.17 Square Shape Scoring | " +
                 yoloExecutionProvider;
         }
 
@@ -772,6 +772,14 @@ namespace CSharp_YoloOnnx
                 StringComparison.OrdinalIgnoreCase))
             {
                 return "三角形";
+            }
+
+            if (string.Equals(
+                name,
+                "square",
+                StringComparison.OrdinalIgnoreCase))
+            {
+                return "正方形";
             }
 
             return name;

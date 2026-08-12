@@ -1,5 +1,15 @@
 # 版本紀錄
 
+## V1.5.17 Square and Rectangle Scoring Test
+
+- Add `Templates/square.png` as the fourth random challenge target.
+- Classify a closed four-corner template as a square before applying the stricter five-point star rules.
+- Give a recognizable closed quadrilateral a 55-point base, including hand-drawn rectangles.
+- Add up to 20 points as the drawing's bounding-box aspect ratio approaches 1:1 and up to 25 points for detailed centerline agreement with the square template.
+- Keep a 2:1 rectangle near 60 points before fine-detail bonuses while allowing a close hand-drawn square to exceed 70 points.
+- Tighten star gating to require five or six peaks and stronger concavity so a four-corner drawing cannot pass as a star.
+- Preserve V1.5.16 random target selection and V1.5.15 marker tracking.
+
 ## V1.5.16 Random Shape Challenge Test
 
 - Load a random `.png`, `.jpg`, `.jpeg`, or `.bmp` target from the output `Templates` folder when the application starts and after each completed round.

@@ -478,6 +478,26 @@ namespace CSharp_YoloOnnx
                     shapeGate.Confidence * 4d);
             }
 
+            if (templateKind == ShapeKind.Square)
+            {
+                double detailBonus = Clamp01(
+                    (detailScore - 0.25d) / 0.75d);
+                double squarenessBonus = Math.Exp(
+                    -2.2d * Math.Abs(
+                        Math.Log(Math.Max(
+                            0.05d,
+                            drawingDescriptor.BoundsAspectRatio))));
+
+                // A closed quadrilateral earns the basic score. Rectangles
+                // remain acceptable; approaching a 1:1 square and matching the
+                // exact template supply the remaining bonuses.
+                return Math.Min(
+                    100d,
+                    55d +
+                    squarenessBonus * 20d +
+                    detailBonus * 25d);
+            }
+
             // Excessive branches are characteristic of scribbles. Allow a few
             // additional junctions for imperfect hand drawing, then reduce the
             // structural confidence instead of rewarding incidental overlap.
@@ -712,8 +732,31 @@ namespace CSharp_YoloOnnx
                     radialMean <= 0d
                         ? 0d
                         : Math.Sqrt(radialVariance) / radialMean,
-                MinimumRadialCoverage = minimumRadialCoverage
+                MinimumRadialCoverage = minimumRadialCoverage,
+                BoundsAspectRatio = CalculateBoundsAspectRatio(mask)
             };
+        }
+
+        private static double CalculateBoundsAspectRatio(bool[,] mask)
+        {
+            int minX;
+            int minY;
+            int maxX;
+            int maxY;
+
+            if (!TryGetBounds(
+                mask,
+                out minX,
+                out minY,
+                out maxX,
+                out maxY))
+            {
+                return 0d;
+            }
+
+            double width = Math.Max(1, maxX - minX + 1);
+            double height = Math.Max(1, maxY - minY + 1);
+            return Math.Min(width, height) / Math.Max(width, height);
         }
 
         private static int CountRadialPeaks(double[] radialProfile)
@@ -757,9 +800,19 @@ namespace CSharp_YoloOnnx
 
         private static ShapeKind ClassifyTemplate(ShapeDescriptor descriptor)
         {
-            if (descriptor.RadialPeakCount >= 4 &&
+            if (descriptor.RadialPeakCount >= 3 &&
+                descriptor.RadialPeakCount <= 5 &&
+                descriptor.RadialCoefficientVariation <= 0.24d &&
+                descriptor.MinimumRadialCoverage >= 0.48d &&
+                descriptor.Endpoints <= 10)
+            {
+                return ShapeKind.Square;
+            }
+
+            if (descriptor.RadialPeakCount >= 5 &&
                 descriptor.RadialPeakCount <= 7 &&
-                descriptor.RadialCoefficientVariation >= 0.16d)
+                descriptor.RadialCoefficientVariation >= 0.20d &&
+                descriptor.MinimumRadialCoverage < 0.62d)
             {
                 return ShapeKind.Star;
             }
@@ -800,11 +853,12 @@ namespace CSharp_YoloOnnx
                     0.62d,
                     0.12d);
                 bool passed =
-                    drawing.RadialPeakCount >= 4 &&
+                    drawing.RadialPeakCount >= 5 &&
                     drawing.RadialPeakCount <= 6 &&
-                    drawing.RadialCoefficientVariation >= 0.16d &&
+                    drawing.RadialCoefficientVariation >= 0.20d &&
                     drawing.RadialCoefficientVariation <= 0.55d &&
-                    drawing.MinimumRadialCoverage >= 0.14d;
+                    drawing.MinimumRadialCoverage >= 0.14d &&
+                    drawing.MinimumRadialCoverage < 0.62d;
 
                 return new ShapeGateResult(
                     passed,
@@ -867,6 +921,35 @@ namespace CSharp_YoloOnnx
                     peakScore * 0.50d +
                     cornerScore * 0.30d +
                     closureScore * 0.20d);
+            }
+
+            if (kind == ShapeKind.Square)
+            {
+                double peakScore = Math.Exp(
+                    -0.75d * Math.Abs(drawing.RadialPeakCount - 4));
+                double cornerScore = RangeScore(
+                    drawing.RadialCoefficientVariation,
+                    0.07d,
+                    0.34d,
+                    0.12d);
+                double closureScore = RangeScore(
+                    drawing.MinimumRadialCoverage,
+                    0.38d,
+                    1d,
+                    0.15d);
+                bool passed =
+                    drawing.RadialPeakCount >= 3 &&
+                    drawing.RadialPeakCount <= 5 &&
+                    drawing.RadialCoefficientVariation >= 0.06d &&
+                    drawing.RadialCoefficientVariation <= 0.38d &&
+                    drawing.MinimumRadialCoverage >= 0.35d &&
+                    drawing.Endpoints <= 10;
+
+                return new ShapeGateResult(
+                    passed,
+                    peakScore * 0.45d +
+                    cornerScore * 0.30d +
+                    closureScore * 0.25d);
             }
 
             // Preserve generic comparison for an unrecognized custom template,
@@ -1583,6 +1666,7 @@ namespace CSharp_YoloOnnx
             public int RadialPeakCount { get; set; }
             public double RadialCoefficientVariation { get; set; }
             public double MinimumRadialCoverage { get; set; }
+            public double BoundsAspectRatio { get; set; }
         }
 
         private enum ShapeKind
@@ -1590,7 +1674,8 @@ namespace CSharp_YoloOnnx
             Unknown,
             Star,
             Circle,
-            Triangle
+            Triangle,
+            Square
         }
 
         private sealed class ShapeGateResult
