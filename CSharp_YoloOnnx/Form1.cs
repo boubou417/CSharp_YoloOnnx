@@ -692,29 +692,9 @@ namespace CSharp_YoloOnnx
                 return;
             }
 
-            float progress =
-                (float)Math.Max(
-                    0d,
-                    Math.Min(1d, elapsedMs / durationMs));
-
-            if (activeMagicAnimationTier ==
-                MagicAnimationTier.GrandSuccess)
-            {
-                DrawGrandSuccessAnimation(
-                    graphics,
-                    imageWidth,
-                    imageHeight,
-                    progress);
-            }
-            else if (activeMagicAnimationTier ==
-                MagicAnimationTier.Failed)
-            {
-                DrawFailedMagicAnimation(
-                    graphics,
-                    imageWidth,
-                    imageHeight,
-                    progress);
-            }
+            // A missing GIF must not break camera capture or scoring.
+            // The animation loader writes the missing asset to Debug output.
+            return;
         }
 
         private void InitializeAirDrawControls()
