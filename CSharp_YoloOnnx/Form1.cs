@@ -168,6 +168,16 @@ namespace CSharp_YoloOnnx
         Image magicAnimationImage;
         MemoryStream magicAnimationStream;
         DateTime magicAnimationStartedAt = DateTime.MinValue;
+        MagicAnimationTier activeMagicAnimationTier =
+            MagicAnimationTier.None;
+
+        private enum MagicAnimationTier
+        {
+            None,
+            Failed,
+            Success,
+            GrandSuccess
+        }
 
         InferenceSession yoloSession;
         string yoloExecutionProvider = "CPU";
@@ -493,34 +503,49 @@ namespace CSharp_YoloOnnx
             }
 
             magicAnimationStartedAt = DateTime.MinValue;
+            activeMagicAnimationTier = MagicAnimationTier.None;
         }
 
-        private bool StartMagicAnimation()
+        private bool StartMagicAnimation(double score)
         {
-            if (magicAnimationImage == null ||
-                !ImageAnimator.CanAnimate(magicAnimationImage))
+            activeMagicAnimationTier =
+                score >= 85d
+                    ? MagicAnimationTier.GrandSuccess
+                    : score >= 70d
+                        ? MagicAnimationTier.Success
+                        : MagicAnimationTier.Failed;
+
+            if (activeMagicAnimationTier == MagicAnimationTier.Success)
             {
-                return false;
-            }
+                if (magicAnimationImage == null ||
+                    !ImageAnimator.CanAnimate(magicAnimationImage))
+                {
+                    activeMagicAnimationTier =
+                        MagicAnimationTier.GrandSuccess;
+                }
+                else
+                {
+                    ImageAnimator.StopAnimate(
+                        magicAnimationImage,
+                        MagicAnimationFrameChanged);
 
-            ImageAnimator.StopAnimate(
-                magicAnimationImage,
-                MagicAnimationFrameChanged);
+                    Guid[] dimensions =
+                        magicAnimationImage.FrameDimensionsList;
 
-            Guid[] dimensions =
-                magicAnimationImage.FrameDimensionsList;
+                    if (dimensions.Length > 0)
+                    {
+                        magicAnimationImage.SelectActiveFrame(
+                            new FrameDimension(dimensions[0]),
+                            0);
+                    }
 
-            if (dimensions.Length > 0)
-            {
-                magicAnimationImage.SelectActiveFrame(
-                    new FrameDimension(dimensions[0]),
-                    0);
+                    ImageAnimator.Animate(
+                        magicAnimationImage,
+                        MagicAnimationFrameChanged);
+                }
             }
 
             magicAnimationStartedAt = DateTime.Now;
-            ImageAnimator.Animate(
-                magicAnimationImage,
-                MagicAnimationFrameChanged);
             return true;
         }
 
@@ -537,37 +562,304 @@ namespace CSharp_YoloOnnx
             int imageWidth,
             int imageHeight)
         {
-            if (magicAnimationImage == null ||
-                magicAnimationStartedAt == DateTime.MinValue)
+            if (magicAnimationStartedAt == DateTime.MinValue ||
+                activeMagicAnimationTier == MagicAnimationTier.None)
             {
                 return;
             }
 
-            if ((DateTime.Now - magicAnimationStartedAt)
-                    .TotalMilliseconds >= MagicAnimationDisplayMs)
+            double elapsedMs =
+                (DateTime.Now - magicAnimationStartedAt)
+                    .TotalMilliseconds;
+            double durationMs =
+                activeMagicAnimationTier ==
+                    MagicAnimationTier.GrandSuccess
+                        ? 2800d
+                        : activeMagicAnimationTier ==
+                            MagicAnimationTier.Failed
+                                ? 2200d
+                                : MagicAnimationDisplayMs;
+
+            if (elapsedMs >= durationMs)
             {
-                ImageAnimator.StopAnimate(
-                    magicAnimationImage,
-                    MagicAnimationFrameChanged);
+                if (magicAnimationImage != null)
+                {
+                    ImageAnimator.StopAnimate(
+                        magicAnimationImage,
+                        MagicAnimationFrameChanged);
+                }
+
                 magicAnimationStartedAt = DateTime.MinValue;
+                activeMagicAnimationTier = MagicAnimationTier.None;
                 return;
             }
 
-            ImageAnimator.UpdateFrames(magicAnimationImage);
+            if (activeMagicAnimationTier == MagicAnimationTier.Success &&
+                magicAnimationImage != null)
+            {
+                ImageAnimator.UpdateFrames(magicAnimationImage);
 
-            int animationSize = (int)Math.Min(
-                Math.Min(imageWidth, imageHeight) * 0.72f,
-                640f);
-            int left = (imageWidth - animationSize) / 2;
-            int top = (imageHeight - animationSize) / 2;
+                int animationSize = (int)Math.Min(
+                    Math.Min(imageWidth, imageHeight) * 0.72f,
+                    640f);
+                int left = (imageWidth - animationSize) / 2;
+                int top = (imageHeight - animationSize) / 2;
 
-            graphics.DrawImage(
-                magicAnimationImage,
-                new Rectangle(
-                    left,
-                    top,
-                    animationSize,
-                    animationSize));
+                graphics.DrawImage(
+                    magicAnimationImage,
+                    new Rectangle(
+                        left,
+                        top,
+                        animationSize,
+                        animationSize));
+                return;
+            }
+
+            float progress =
+                (float)Math.Max(
+                    0d,
+                    Math.Min(1d, elapsedMs / durationMs));
+
+            if (activeMagicAnimationTier ==
+                MagicAnimationTier.GrandSuccess)
+            {
+                DrawGrandSuccessAnimation(
+                    graphics,
+                    imageWidth,
+                    imageHeight,
+                    progress);
+            }
+            else
+            {
+                DrawFailedMagicAnimation(
+                    graphics,
+                    imageWidth,
+                    imageHeight,
+                    progress);
+            }
+        }
+
+        private void DrawGrandSuccessAnimation(
+            Graphics graphics,
+            int imageWidth,
+            int imageHeight,
+            float progress)
+        {
+            GraphicsState state = graphics.Save();
+            graphics.SmoothingMode = SmoothingMode.AntiAlias;
+
+            float cx = imageWidth * 0.5f;
+            float cy = imageHeight * 0.48f;
+            float baseRadius =
+                Math.Min(imageWidth, imageHeight) * 0.27f;
+            float fade =
+                progress < 0.78f
+                    ? 1f
+                    : Math.Max(0f, (1f - progress) / 0.22f);
+            float pulse =
+                1f + 0.07f *
+                (float)Math.Sin(progress * Math.PI * 14d);
+
+            using (SolidBrush glow = new SolidBrush(
+                Color.FromArgb(
+                    (int)(80f * fade),
+                    100,
+                    220,
+                    255)))
+            {
+                graphics.FillEllipse(
+                    glow,
+                    cx - baseRadius * 0.48f,
+                    cy - baseRadius * 0.48f,
+                    baseRadius * 0.96f,
+                    baseRadius * 0.96f);
+            }
+
+            for (int ring = 0; ring < 4; ring++)
+            {
+                float radius =
+                    baseRadius *
+                    (0.48f + ring * 0.18f) *
+                    pulse;
+                float rotation =
+                    progress * (ring % 2 == 0 ? 300f : -240f) +
+                    ring * 27f;
+
+                using (Pen ringPen = new Pen(
+                    Color.FromArgb(
+                        (int)((210f - ring * 25f) * fade),
+                        ring % 2 == 0 ? 95 : 210,
+                        ring % 2 == 0 ? 210 : 120,
+                        255),
+                    Math.Max(3f, baseRadius * 0.018f)))
+                {
+                    ringPen.StartCap = LineCap.Round;
+                    ringPen.EndCap = LineCap.Round;
+                    graphics.DrawArc(
+                        ringPen,
+                        cx - radius,
+                        cy - radius,
+                        radius * 2f,
+                        radius * 2f,
+                        rotation,
+                        250f);
+                    graphics.DrawArc(
+                        ringPen,
+                        cx - radius,
+                        cy - radius,
+                        radius * 2f,
+                        radius * 2f,
+                        rotation + 270f,
+                        62f);
+                }
+            }
+
+            for (int i = 0; i < 28; i++)
+            {
+                double angle =
+                    i * Math.PI * 2d / 28d +
+                    progress * (i % 2 == 0 ? 5d : -4d);
+                float orbit =
+                    baseRadius *
+                    (0.58f + (i % 5) * 0.105f);
+                float x =
+                    cx + (float)Math.Cos(angle) * orbit;
+                float y =
+                    cy + (float)Math.Sin(angle) * orbit;
+                float size =
+                    Math.Max(3f, baseRadius * (0.018f + (i % 3) * 0.009f));
+
+                using (SolidBrush spark = new SolidBrush(
+                    Color.FromArgb(
+                        (int)(235f * fade),
+                        i % 3 == 0 ? 255 : 125,
+                        i % 3 == 0 ? 220 : 205,
+                        255)))
+                {
+                    graphics.FillEllipse(
+                        spark,
+                        x - size,
+                        y - size,
+                        size * 2f,
+                        size * 2f);
+                }
+            }
+
+            float beamLength =
+                imageWidth * Math.Min(0.46f, progress * 0.62f);
+            using (Pen beamGlow = new Pen(
+                Color.FromArgb((int)(85f * fade), 80, 190, 255),
+                Math.Max(18f, baseRadius * 0.12f)))
+            using (Pen beamCore = new Pen(
+                Color.FromArgb((int)(240f * fade), 235, 250, 255),
+                Math.Max(5f, baseRadius * 0.035f)))
+            {
+                graphics.DrawLine(
+                    beamGlow,
+                    cx,
+                    cy,
+                    cx + beamLength,
+                    cy + beamLength * 0.36f);
+                graphics.DrawLine(
+                    beamCore,
+                    cx,
+                    cy,
+                    cx + beamLength,
+                    cy + beamLength * 0.36f);
+            }
+
+            graphics.Restore(state);
+        }
+
+        private void DrawFailedMagicAnimation(
+            Graphics graphics,
+            int imageWidth,
+            int imageHeight,
+            float progress)
+        {
+            GraphicsState state = graphics.Save();
+            graphics.SmoothingMode = SmoothingMode.AntiAlias;
+
+            float cx = imageWidth * 0.5f;
+            float cy = imageHeight * 0.48f;
+            float radius =
+                Math.Min(imageWidth, imageHeight) * 0.22f;
+            float fade =
+                progress < 0.70f
+                    ? 1f
+                    : Math.Max(0f, (1f - progress) / 0.30f);
+            float wobble =
+                (float)Math.Sin(progress * Math.PI * 18d) *
+                radius * 0.06f;
+
+            using (Pen brokenRing = new Pen(
+                Color.FromArgb(
+                    (int)(190f * fade),
+                    142,
+                    95,
+                    210),
+                Math.Max(4f, radius * 0.035f)))
+            {
+                graphics.DrawArc(
+                    brokenRing,
+                    cx - radius + wobble,
+                    cy - radius,
+                    radius * 2f,
+                    radius * 2f,
+                    18f + progress * 80f,
+                    115f);
+                graphics.DrawArc(
+                    brokenRing,
+                    cx - radius - wobble,
+                    cy - radius,
+                    radius * 2f,
+                    radius * 2f,
+                    188f - progress * 65f,
+                    92f);
+            }
+
+            for (int i = 0; i < 9; i++)
+            {
+                float rise =
+                    radius *
+                    (0.15f + progress * (0.65f + i * 0.035f));
+                float drift =
+                    (float)Math.Sin(i * 2.1d + progress * 9d) *
+                    radius * 0.34f;
+                float size =
+                    radius * (0.08f + (i % 3) * 0.035f);
+
+                using (SolidBrush smoke = new SolidBrush(
+                    Color.FromArgb(
+                        (int)((105f - i * 5f) * fade),
+                        105,
+                        80,
+                        135)))
+                {
+                    graphics.FillEllipse(
+                        smoke,
+                        cx + drift - size,
+                        cy - rise - size,
+                        size * 2f,
+                        size * 2f);
+                }
+            }
+
+            using (Pen droop = new Pen(
+                Color.FromArgb((int)(210f * fade), 145, 105, 230),
+                Math.Max(4f, radius * 0.025f)))
+            {
+                PointF[] fall =
+                {
+                    new PointF(cx, cy),
+                    new PointF(cx + radius * 0.10f, cy + radius * 0.35f),
+                    new PointF(cx - radius * 0.08f, cy + radius * 0.70f),
+                    new PointF(cx + radius * 0.04f, cy + radius * 1.02f)
+                };
+                graphics.DrawCurve(droop, fall);
+            }
+
+            graphics.Restore(state);
         }
 
         private void InitializeAirDrawControls()
@@ -1368,8 +1660,17 @@ namespace CSharp_YoloOnnx
                 Debug.WriteLine("Air Draw error: " + ex);
             }
 
-            if (drawingSaved && StartMagicAnimation())
-                drawingStatusText += "｜魔法施放！";
+            if (drawingSaved &&
+                lastDrawingScore.HasValue &&
+                StartMagicAnimation(lastDrawingScore.Value))
+            {
+                drawingStatusText +=
+                    lastDrawingScore.Value >= 85d
+                        ? "｜魔法大成功！"
+                        : lastDrawingScore.Value >= 70d
+                            ? "｜魔法施放成功！"
+                            : "｜魔法施放失敗";
+            }
 
             drawingFinishedAt = DateTime.Now;
             gameState = GameState.Finished;
