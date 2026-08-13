@@ -1,5 +1,15 @@
 # 版本紀錄
 
+## V1.5.19 Low-Overhead Modern UI Test
+
+- Apply a static dark navy theme to the Form, camera surround, toolbar, and bottom status area.
+- Add a compact application title and use consistent flat color-coded buttons for connection, capture, and random-target actions.
+- Restyle the upper-right target preview as a larger high-contrast challenge card.
+- Restyle similarity, game state, and performance diagnostics as three visually distinct status regions with dark-theme score colors.
+- Keep the camera PictureBox, inference threads, marker tracker, and frame-rendering path unchanged.
+- Avoid custom Paint handlers, transparency animations, shadows, gradients, rounded-region updates, and per-frame control creation.
+- Preserve V1.5.18 strict triangle/square scoring and all random challenge behavior.
+
 ## V1.5.18 Strict Triangle and Square Corner Test
 
 - Require exactly three dominant radial corners before a drawing can receive the triangle recognizable-shape score.

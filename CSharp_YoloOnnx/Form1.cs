@@ -100,6 +100,7 @@ namespace CSharp_YoloOnnx
         Panel panelTemplatePreview;
         PictureBox pBoxTemplatePreview;
         Label lblTemplatePreview;
+        Label lblApplicationTitle;
         Label lblSimilarityScore;
         Label lblAirDrawStatus;
         Label lblPerformanceDiagnostics;
@@ -289,14 +290,15 @@ namespace CSharp_YoloOnnx
         {
             InitializeComponent();
 
-            Text = "CSharp YOLO ONNX V1.5.18 Strict Corner Scoring";
+            Text = "Air Draw Magic | V1.5.19";
             panelToolBar.Dock = DockStyle.Top;
-            panelToolBar.Height = 40;
+            panelToolBar.Height = 56;
             panelStatusBar.Dock = DockStyle.Bottom;
-            panelStatusBar.Height = 64;
+            panelStatusBar.Height = 72;
             panelImage.Dock = DockStyle.Fill;
             pBox.Dock = DockStyle.Fill;
             pBox.SizeMode = PictureBoxSizeMode.Zoom;
+            ApplyModernTheme();
             InitializeAirDrawControls();
             LoadRandomTemplate(false);
             if (!yellowTipMode)
@@ -320,7 +322,7 @@ namespace CSharp_YoloOnnx
             string modelPath = "yolov8n-pose.onnx";
             InitializeYoloSession(modelPath);
             Text =
-                "CSharp YOLO ONNX V1.5.18 Strict Corner Scoring | " +
+                "Air Draw Magic | V1.5.19 | " +
                 yoloExecutionProvider;
         }
 
@@ -570,15 +572,52 @@ namespace CSharp_YoloOnnx
 
         private void InitializeAirDrawControls()
         {
+            lblApplicationTitle = new Label
+            {
+                Name = "lblApplicationTitle",
+                Text = "AIR DRAW  /  MAGIC SHAPE",
+                Width = 280,
+                Height = 56,
+                Left = 20,
+                Top = 0,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Font = new Font(
+                    "Segoe UI Semibold",
+                    12f,
+                    FontStyle.Bold),
+                ForeColor = Color.FromArgb(240, 244, 255),
+                BackColor = Color.Transparent
+            };
+            panelToolBar.Controls.Add(lblApplicationTitle);
+
+            btnConnect.Left = 318;
+            btnConnect.Top = 13;
+            btnConnect.Width = 108;
+            btnConnect.Height = 32;
+            StyleToolbarButton(
+                btnConnect,
+                Color.FromArgb(44, 62, 92));
+
+            btnGrab.Left = 438;
+            btnGrab.Top = 13;
+            btnGrab.Width = 92;
+            btnGrab.Height = 32;
+            StyleToolbarButton(
+                btnGrab,
+                Color.FromArgb(26, 137, 108));
+
             btnSelectTemplate = new Button
             {
                 Name = "btnSelectTemplate",
-                Text = "隨機換圖",
-                Width = 110,
-                Height = 26,
-                Left = btnGrab.Right + 20,
-                Top = 7
+                Text = "↻  隨機換圖",
+                Width = 126,
+                Height = 32,
+                Left = btnGrab.Right + 12,
+                Top = 13
             };
+            StyleToolbarButton(
+                btnSelectTemplate,
+                Color.FromArgb(101, 76, 180));
 
             btnSelectTemplate.Click += btnSelectTemplate_Click;
             panelToolBar.Controls.Add(btnSelectTemplate);
@@ -586,34 +625,35 @@ namespace CSharp_YoloOnnx
             panelTemplatePreview = new Panel
             {
                 Name = "panelTemplatePreview",
-                Width = 156,
-                Height = 180,
-                BackColor = Color.White,
+                Width = 168,
+                Height = 196,
+                BackColor = Color.FromArgb(22, 29, 45),
                 BorderStyle = BorderStyle.FixedSingle,
                 Anchor = AnchorStyles.Top | AnchorStyles.Right,
-                Left = Math.Max(0, panelImage.ClientSize.Width - 168),
-                Top = 12
+                Left = Math.Max(0, panelImage.ClientSize.Width - 186),
+                Top = 18
             };
 
             lblTemplatePreview = new Label
             {
                 Dock = DockStyle.Top,
-                Height = 28,
-                Text = "本回合目標",
+                Height = 36,
+                Text = "本回合目標  TARGET",
                 TextAlign = ContentAlignment.MiddleCenter,
                 Font = new Font(
                     "Microsoft JhengHei UI",
-                    10f,
+                    9.5f,
                     FontStyle.Bold),
                 ForeColor = Color.White,
-                BackColor = Color.FromArgb(190, 35, 35, 35)
+                BackColor = Color.FromArgb(101, 76, 180)
             };
 
             pBoxTemplatePreview = new PictureBox
             {
                 Dock = DockStyle.Fill,
                 SizeMode = PictureBoxSizeMode.Zoom,
-                BackColor = Color.Black
+                BackColor = Color.FromArgb(10, 14, 24),
+                Padding = new Padding(10)
             };
 
             panelTemplatePreview.Controls.Add(pBoxTemplatePreview);
@@ -624,15 +664,15 @@ namespace CSharp_YoloOnnx
             lblSimilarityScore = new Label
             {
                 Dock = DockStyle.Left,
-                Width = 300,
+                Width = 292,
                 TextAlign = ContentAlignment.MiddleCenter,
-                BorderStyle = BorderStyle.FixedSingle,
+                BorderStyle = BorderStyle.None,
                 Font = new Font(
                     "Microsoft JhengHei UI",
                     16f,
                     FontStyle.Bold),
-                ForeColor = Color.DimGray,
-                BackColor = Color.White,
+                ForeColor = Color.FromArgb(160, 174, 202),
+                BackColor = Color.FromArgb(22, 29, 45),
                 Text = "形狀相似度：--"
             };
 
@@ -641,26 +681,30 @@ namespace CSharp_YoloOnnx
                 Dock = DockStyle.Fill,
                 AutoEllipsis = true,
                 TextAlign = ContentAlignment.MiddleLeft,
-                Padding = new Padding(12, 0, 6, 0),
-                ForeColor = Color.Black,
-                BackColor = SystemColors.Control,
+                Padding = new Padding(18, 0, 8, 0),
+                Font = new Font(
+                    "Microsoft JhengHei UI",
+                    10f,
+                    FontStyle.Bold),
+                ForeColor = Color.FromArgb(226, 232, 245),
+                BackColor = Color.FromArgb(30, 39, 57),
                 Text = drawingStatusText
             };
 
             lblPerformanceDiagnostics = new Label
             {
                 Dock = DockStyle.Right,
-                Width = 650,
+                Width = 620,
                 AutoEllipsis = true,
                 TextAlign = ContentAlignment.MiddleLeft,
                 Padding = new Padding(8, 0, 8, 0),
-                BorderStyle = BorderStyle.FixedSingle,
+                BorderStyle = BorderStyle.None,
                 Font = new Font(
                     "Consolas",
                     9f,
                     FontStyle.Regular),
-                ForeColor = Color.Navy,
-                BackColor = Color.WhiteSmoke,
+                ForeColor = Color.FromArgb(116, 214, 255),
+                BackColor = Color.FromArgb(15, 21, 34),
                 Text =
                     "YOLO -- | CAM -- | DISP -- | " +
                     "POSE -- | HAND -- | WAIT"
@@ -672,6 +716,37 @@ namespace CSharp_YoloOnnx
             panelStatusBar.Controls.Add(lblSimilarityScore);
             lblSimilarityScore.BringToFront();
             lblPerformanceDiagnostics.BringToFront();
+        }
+
+        private void ApplyModernTheme()
+        {
+            BackColor = Color.FromArgb(10, 14, 24);
+            ForeColor = Color.FromArgb(226, 232, 245);
+            Font = new Font(
+                "Microsoft JhengHei UI",
+                9f,
+                FontStyle.Regular);
+            MinimumSize = new Size(1080, 720);
+            panelToolBar.BackColor = Color.FromArgb(17, 24, 39);
+            panelStatusBar.BackColor = Color.FromArgb(15, 21, 34);
+            panelImage.BackColor = Color.FromArgb(7, 10, 18);
+            pBox.BackColor = Color.FromArgb(7, 10, 18);
+        }
+
+        private static void StyleToolbarButton(
+            Button button,
+            Color background)
+        {
+            button.FlatStyle = FlatStyle.Flat;
+            button.FlatAppearance.BorderSize = 0;
+            button.BackColor = background;
+            button.ForeColor = Color.White;
+            button.Font = new Font(
+                "Microsoft JhengHei UI",
+                9f,
+                FontStyle.Bold);
+            button.Cursor = Cursors.Hand;
+            button.UseVisualStyleBackColor = false;
         }
 
         private void LoadRandomTemplate(bool avoidCurrent)
@@ -3779,7 +3854,7 @@ namespace CSharp_YoloOnnx
                 lblSimilarityScore.Text =
                     "形狀相似度：--";
                 lblSimilarityScore.ForeColor =
-                    Color.DimGray;
+                    Color.FromArgb(160, 174, 202);
                 return;
             }
 
@@ -3791,10 +3866,10 @@ namespace CSharp_YoloOnnx
                 " 分";
             lblSimilarityScore.ForeColor =
                 score >= 70d
-                    ? Color.Green
+                    ? Color.FromArgb(88, 224, 166)
                     : score >= 55d
-                        ? Color.DarkOrange
-                        : Color.Firebrick;
+                        ? Color.FromArgb(255, 190, 92)
+                        : Color.FromArgb(255, 105, 125);
         }
 
         private List<Detection> PostProcess(Tensor<float> output)
