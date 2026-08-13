@@ -662,33 +662,50 @@ namespace CSharp_YoloOnnx
                 ImageAnimator.UpdateFrames(
                     activeMagicAnimationImage);
 
-                float relativeSize =
-                    activeMagicAnimationTier ==
-                        MagicAnimationTier.GrandSuccess
-                            ? 0.86f
-                            : activeMagicAnimationTier ==
-                                MagicAnimationTier.Failed
-                                    ? 0.66f
-                                    : 0.72f;
-                int animationSize = (int)Math.Min(
-                    Math.Min(imageWidth, imageHeight) *
-                        relativeSize,
-                    activeMagicAnimationTier ==
-                        MagicAnimationTier.GrandSuccess
-                            ? 820f
-                            : 680f);
+                // Scale like PictureBoxSizeMode.Zoom with cropping:
+                // preserve the GIF aspect ratio and cover the whole camera
+                // frame so no animation remains as a small center overlay.
+                float scale = Math.Max(
+                    imageWidth /
+                        (float)activeMagicAnimationImage.Width,
+                    imageHeight /
+                        (float)activeMagicAnimationImage.Height);
+                int animationWidth = Math.Max(
+                    1,
+                    (int)Math.Ceiling(
+                        activeMagicAnimationImage.Width *
+                        scale));
+                int animationHeight = Math.Max(
+                    1,
+                    (int)Math.Ceiling(
+                        activeMagicAnimationImage.Height *
+                        scale));
                 int left =
-                    (imageWidth - animationSize) / 2;
+                    (imageWidth - animationWidth) / 2;
                 int top =
-                    (imageHeight - animationSize) / 2;
+                    (imageHeight - animationHeight) / 2;
+
+                InterpolationMode previousInterpolation =
+                    graphics.InterpolationMode;
+                PixelOffsetMode previousPixelOffset =
+                    graphics.PixelOffsetMode;
+                graphics.InterpolationMode =
+                    InterpolationMode.HighQualityBicubic;
+                graphics.PixelOffsetMode =
+                    PixelOffsetMode.HighQuality;
 
                 graphics.DrawImage(
                     activeMagicAnimationImage,
                     new Rectangle(
                         left,
                         top,
-                        animationSize,
-                        animationSize));
+                        animationWidth,
+                        animationHeight));
+
+                graphics.InterpolationMode =
+                    previousInterpolation;
+                graphics.PixelOffsetMode =
+                    previousPixelOffset;
                 return;
             }
 
