@@ -471,7 +471,7 @@ namespace CSharp_YoloOnnx
             DisposeMagicAnimation();
 
             LoadMagicAnimation(
-                "magic-cast-test.gif",
+                "magic-success-3d.gif",
                 out magicAnimationImage,
                 out magicAnimationStream);
             LoadMagicAnimation(
