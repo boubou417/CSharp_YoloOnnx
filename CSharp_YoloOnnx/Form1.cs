@@ -41,7 +41,9 @@ namespace CSharp_YoloOnnx
 
         const int MinimumDrawingPoints = 12;
         const int FinishedDisplayMs = 1800;
-        const int MagicAnimationDisplayMs = 1800;
+        const int MagicAnimationDisplayMs = 4000;
+        const int FailedMagicAnimationDisplayMs = 3500;
+        const int GrandSuccessMagicAnimationDisplayMs = 5000;
         const int FingertipMissingBreakMs = 500;
         const int FingertipMarkerVisibleMs = 400;
         const int FingertipInferenceIntervalMs = 67;
@@ -643,10 +645,10 @@ namespace CSharp_YoloOnnx
             double durationMs =
                 activeMagicAnimationTier ==
                     MagicAnimationTier.GrandSuccess
-                        ? 2800d
+                        ? GrandSuccessMagicAnimationDisplayMs
                         : activeMagicAnimationTier ==
                             MagicAnimationTier.Failed
-                                ? 2200d
+                                ? FailedMagicAnimationDisplayMs
                                 : MagicAnimationDisplayMs;
 
             if (elapsedMs >= durationMs)
