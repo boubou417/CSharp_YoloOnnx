@@ -480,7 +480,7 @@ namespace CSharp_YoloOnnx
 
             if (templateKind == ShapeKind.Square)
             {
-                double detailBonus = Clamp01(
+                double squareDetailBonus = Clamp01(
                     (detailScore - 0.25d) / 0.75d);
                 double squarenessBonus = Math.Exp(
                     -2.2d * Math.Abs(
@@ -495,7 +495,7 @@ namespace CSharp_YoloOnnx
                     100d,
                     55d +
                     squarenessBonus * 20d +
-                    detailBonus * 25d);
+                    squareDetailBonus * 25d);
             }
 
             // Excessive branches are characteristic of scribbles. Allow a few

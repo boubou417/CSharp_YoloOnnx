@@ -2,6 +2,7 @@
 
 ## V1.5.17 Square and Rectangle Scoring Test
 
+- Fix the C# local-variable scope collision between the square-specific detail bonus and the generic detail bonus.
 - Add `Templates/square.png` as the fourth random challenge target.
 - Classify a closed four-corner template as a square before applying the stricter five-point star rules.
 - Give a recognizable closed quadrilateral a 55-point base, including hand-drawn rectangles.
