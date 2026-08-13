@@ -800,8 +800,7 @@ namespace CSharp_YoloOnnx
 
         private static ShapeKind ClassifyTemplate(ShapeDescriptor descriptor)
         {
-            if (descriptor.RadialPeakCount >= 3 &&
-                descriptor.RadialPeakCount <= 5 &&
+            if (descriptor.RadialPeakCount == 4 &&
                 descriptor.RadialCoefficientVariation <= 0.24d &&
                 descriptor.MinimumRadialCoverage >= 0.48d &&
                 descriptor.Endpoints <= 10)
@@ -824,8 +823,7 @@ namespace CSharp_YoloOnnx
                 return ShapeKind.Circle;
             }
 
-            if (descriptor.RadialPeakCount >= 2 &&
-                descriptor.RadialPeakCount <= 4)
+            if (descriptor.RadialPeakCount == 3)
             {
                 return ShapeKind.Triangle;
             }
@@ -909,8 +907,7 @@ namespace CSharp_YoloOnnx
                     0.82d,
                     0.14d);
                 bool passed =
-                    drawing.RadialPeakCount >= 2 &&
-                    drawing.RadialPeakCount <= 4 &&
+                    drawing.RadialPeakCount == 3 &&
                     drawing.RadialCoefficientVariation >= 0.10d &&
                     drawing.RadialCoefficientVariation <= 0.48d &&
                     drawing.MinimumRadialCoverage >= 0.25d &&
@@ -938,8 +935,7 @@ namespace CSharp_YoloOnnx
                     1d,
                     0.15d);
                 bool passed =
-                    drawing.RadialPeakCount >= 3 &&
-                    drawing.RadialPeakCount <= 5 &&
+                    drawing.RadialPeakCount == 4 &&
                     drawing.RadialCoefficientVariation >= 0.06d &&
                     drawing.RadialCoefficientVariation <= 0.38d &&
                     drawing.MinimumRadialCoverage >= 0.35d &&

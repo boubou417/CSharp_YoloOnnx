@@ -1,5 +1,14 @@
 # 版本紀錄
 
+## V1.5.18 Strict Triangle and Square Corner Test
+
+- Require exactly three dominant radial corners before a drawing can receive the triangle recognizable-shape score.
+- Require exactly four dominant radial corners before a drawing can receive the square or rectangle base score.
+- Cap a four-corner drawing against the triangle target and a three-corner drawing against the square target below 40 points.
+- Keep partial peak-confidence information only for low-score feedback; it can no longer unlock the 55/70-point scoring paths.
+- Preserve hand-drawn line, closure, aspect-ratio, rotation, scale, and detailed centerline tolerances after the correct corner count passes.
+- Preserve V1.5.17 square/rectangle scoring and V1.5.16 random target selection.
+
 ## V1.5.17 Square and Rectangle Scoring Test
 
 - Fix the C# local-variable scope collision between the square-specific detail bonus and the generic detail bonus.
