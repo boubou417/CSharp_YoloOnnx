@@ -65,6 +65,7 @@ namespace CSharp_YoloOnnx
         const float MinimumIdleHandPresence = 0.35f;
         const float MinimumDrawingHandPresence = 0.45f;
         const int YellowStartHoldMs = 600;
+        const int StartCueDisplayMs = 1200;
         const int YellowFinishHoldMs = 900;
         const int YellowMissingBreakMs = 500;
         const int YellowReacquireConfirmMs = 200;
@@ -83,6 +84,7 @@ namespace CSharp_YoloOnnx
         const float YellowStartMoveDistance = 40f;
 
         DateTime drawingFinishedAt = DateTime.MinValue;
+        DateTime startCueStartedAt = DateTime.MinValue;
         DateTime fingertipMissingSince = DateTime.MinValue;
         DateTime lastFingertipSeenAt = DateTime.MinValue;
         DateTime lastFingertipInferenceAt = DateTime.MinValue;
@@ -1425,6 +1427,7 @@ namespace CSharp_YoloOnnx
             }
 
             gameState = GameState.Drawing;
+            startCueStartedAt = DateTime.Now;
             drawingStatusText =
                 GetHandDisplayName(hand) +
                 "開始成功｜請收起其他手指並用食指畫圖";
@@ -3346,8 +3349,13 @@ namespace CSharp_YoloOnnx
                 // 軌跡（畫在最上層前）
                 DrawHandTrail(g, overlayScale);
 
-                foreach (var b in boxes)
+                // During active drawing, keep the camera view clean:
+                // retain only the trail/tool marker and suppress the person
+                // box, skeleton, keypoints and HELLO overlay.
+                if (gameState != GameState.Drawing)
                 {
+                    foreach (var b in boxes)
+                    {
                     bool isMain = (main != null && b == main);
                     var pen = isMain ? mainPen : otherPen;
 
@@ -3506,11 +3514,178 @@ namespace CSharp_YoloOnnx
                     }
                 }
 
+                }
+
                 DrawFingertipMarker(
                     g,
                     overlayScale);
+                DrawStartCueAnimation(
+                    g,
+                    copy.Width,
+                    copy.Height,
+                    overlayScale);
                 DrawMagicAnimation(g, copy.Width, copy.Height);
             }
+        }
+
+        private void DrawStartCueAnimation(
+            Graphics graphics,
+            int imageWidth,
+            int imageHeight,
+            float overlayScale)
+        {
+            if (startCueStartedAt == DateTime.MinValue)
+                return;
+
+            double elapsedMs =
+                (DateTime.Now - startCueStartedAt)
+                    .TotalMilliseconds;
+            if (elapsedMs >= StartCueDisplayMs)
+            {
+                startCueStartedAt = DateTime.MinValue;
+                return;
+            }
+
+            float progress =
+                (float)(elapsedMs / StartCueDisplayMs);
+            float fade =
+                progress < 0.72f
+                    ? 1f
+                    : Math.Max(
+                        0f,
+                        (1f - progress) / 0.28f);
+            float pop =
+                progress < 0.22f
+                    ? 0.55f + progress / 0.22f * 0.55f
+                    : 1f +
+                        0.08f *
+                        (float)Math.Sin(
+                            (progress - 0.22f) *
+                            Math.PI * 5d);
+
+            GraphicsState state = graphics.Save();
+            graphics.SmoothingMode =
+                SmoothingMode.AntiAlias;
+            graphics.CompositingQuality =
+                CompositingQuality.HighQuality;
+            graphics.TextRenderingHint =
+                System.Drawing.Text.TextRenderingHint
+                    .AntiAliasGridFit;
+
+            float cx = imageWidth * 0.5f;
+            float cy = imageHeight * 0.5f;
+            float minimumSide =
+                Math.Min(imageWidth, imageHeight);
+            float ringRadius =
+                minimumSide *
+                (0.14f + progress * 0.25f);
+
+            using (Brush shade = new SolidBrush(
+                Color.FromArgb(
+                    (int)(105f * fade),
+                    2,
+                    10,
+                    28)))
+            {
+                graphics.FillRectangle(
+                    shade,
+                    0,
+                    0,
+                    imageWidth,
+                    imageHeight);
+            }
+
+            for (int ring = 0; ring < 3; ring++)
+            {
+                float radius =
+                    ringRadius -
+                    ring * minimumSide * 0.035f;
+                if (radius <= 0f)
+                    continue;
+
+                using (Pen glow = new Pen(
+                    Color.FromArgb(
+                        (int)((180f - ring * 35f) * fade),
+                        ring == 0 ? 80 : 105,
+                        ring == 0 ? 225 : 170,
+                        255),
+                    Math.Max(
+                        3f,
+                        (9f - ring * 2f) *
+                        overlayScale)))
+                {
+                    graphics.DrawEllipse(
+                        glow,
+                        cx - radius,
+                        cy - radius,
+                        radius * 2f,
+                        radius * 2f);
+                }
+            }
+
+            string startText = "開始！";
+            float fontSize =
+                Math.Max(
+                    58f,
+                    minimumSide * 0.12f) *
+                pop;
+            using (Font font = new Font(
+                "Microsoft JhengHei UI",
+                fontSize,
+                FontStyle.Bold,
+                GraphicsUnit.Pixel))
+            using (StringFormat format =
+                new StringFormat
+                {
+                    Alignment =
+                        StringAlignment.Center,
+                    LineAlignment =
+                        StringAlignment.Center
+                })
+            using (GraphicsPath textPath =
+                new GraphicsPath())
+            {
+                FontFamily family = font.FontFamily;
+                textPath.AddString(
+                    startText,
+                    family,
+                    (int)FontStyle.Bold,
+                    font.Size,
+                    new PointF(cx, cy),
+                    format);
+
+                using (Pen outline = new Pen(
+                    Color.FromArgb(
+                        (int)(245f * fade),
+                        24,
+                        58,
+                        125),
+                    Math.Max(6f, 8f * overlayScale)))
+                using (Brush fill = new LinearGradientBrush(
+                    new RectangleF(
+                        cx - minimumSide * 0.28f,
+                        cy - fontSize,
+                        minimumSide * 0.56f,
+                        fontSize * 2f),
+                    Color.FromArgb(
+                        (int)(255f * fade),
+                        255,
+                        248,
+                        165),
+                    Color.FromArgb(
+                        (int)(255f * fade),
+                        74,
+                        225,
+                        255),
+                    LinearGradientMode.Vertical))
+                {
+                    outline.LineJoin = LineJoin.Round;
+                    graphics.DrawPath(outline, textPath);
+                    graphics.FillPath(fill, textPath);
+                }
+            }
+
+            graphics.Restore(state);
         }
 
         private unsafe Bitmap CopyManagedImageToBitmap(
